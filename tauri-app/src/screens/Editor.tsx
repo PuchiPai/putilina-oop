@@ -1,13 +1,15 @@
 import { useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { ArrowLeft, Save, MousePointer, Square, Circle } from "lucide-react";
+import CanvasScene from "../components/CanvasScene";
 
 export default function Editor() {
     const navigate = useNavigate();
     const params = useParams<{ id?: string }>();
     const rawId = params.id ?? "new";
-    const projectIdDisplay = rawId === "new" ? "Новый" : rawId;
+    // const projectIdDisplay = rawId === "new" ? "Новый" : rawId;
 
+    const [lineAlg, setLineAlg] = useState<"bresenham" | "wu">("bresenham");
     const [activeTool, setActiveTool] = useState<"select" | "square" | "circle">("select");
 
     return (
@@ -51,8 +53,24 @@ export default function Editor() {
 
                 <main className="editor-canvas">
                     <div className="canvas-inner">
-                        <p className="canvas-text">Холст — здесь будут элементы.</p>
-                        <p className="canvas-note">ID проекта: {projectIdDisplay}</p>
+                        <div className="canvas-toolbar">
+                            <button
+                                className={"btn small" + (lineAlg === "bresenham" ? " active-btn" : "")}
+                                onClick={() => setLineAlg("bresenham")}
+                            >
+                                Брезенхем
+                            </button>
+                            <button
+                                className={"btn small" + (lineAlg === "wu" ? " active-btn" : "")}
+                                onClick={() => setLineAlg("wu")}
+                            >
+                                Ву
+                            </button>
+                        </div>
+
+                        <div className="canvas-stage">
+                            <CanvasScene lineAlg={lineAlg} />
+                        </div>
                     </div>
                 </main>
 
