@@ -313,7 +313,7 @@ describe('ShapeFactory', () => {
     });
 
     it('должен выбрасывать ошибку для неизвестного типа', () => {
-        const json = { id: 'bad', type: 'triangle' };
+        const json = { id: 'bad', type: 'hexagon' }; // неизвестный тип
         expect(() => ShapeFactory.fromJSON(json)).toThrow(/Unknown shape type/);
     });
 });

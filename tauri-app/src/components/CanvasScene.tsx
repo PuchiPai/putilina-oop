@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { RasterRenderer, LineAlg } from "../lib/raster/RasterRenderer";
 import { ShapeManager } from "../lib/shapes/ShapeManager";
-import { Rect, Line, Oval } from "../lib/shapes";
+import { Rect, Line, Oval, Triangle, QuadraticBezier, CubicBezier, PathBezier } from "../lib/shapes";
 import { RendererAdapter } from "../lib/shapes/RendererAdapter";
 
 interface CanvasSceneProps {
@@ -46,6 +46,47 @@ const CanvasScene = ({ lineAlg }: CanvasSceneProps) => {
         line.strokeColor = { r: 0, g: 128, b: 0, a: 255 };
         line.strokeWidth = 10;
         m.add(line);
+
+        // Треугольник
+        const tri = new Triangle("tri1",
+            { x: 150, y: 250, rotation: 0, scaleX: 1, scaleY: 1 },
+            0, -40, 40, 30, -40, 30
+        );
+        tri.fillColor = { r: 255, g: 160, b: 60, a: 200 };
+        tri.strokeColor = { r: 0, g: 0, b: 0, a: 255 };
+        tri.strokeWidth = 2;
+        m.add(tri);
+
+        // Квадратичная Безье
+        const qbez = new QuadraticBezier("qbez1",
+            { x: 300, y: 100, rotation: 0, scaleX: 1, scaleY: 1 },
+            { x: 0, y: 0 }, { x: 50, y: -80 }, { x: 100, y: 0 }
+        );
+        qbez.strokeColor = { r: 200, g: 100, b: 200, a: 255 };
+        qbez.strokeWidth = 3;
+        m.add(qbez);
+
+        // Кубическая Безье
+        const cbez = new CubicBezier("cbez1",
+            { x: 500, y: 100, rotation: 0, scaleX: 1, scaleY: 1 },
+            { x: 0, y: 0 }, { x: 30, y: -100 }, { x: 70, y: 100 }, { x: 100, y: 0 }
+        );
+        cbez.strokeColor = { r: 100, g: 200, b: 100, a: 255 };
+        cbez.strokeWidth = 3;
+        m.add(cbez);
+
+        // PathBezier (замкнутый путь в режиме catmull)
+        const path = new PathBezier("path1",
+            { x: 650, y: 300, rotation: 0, scaleX: 1, scaleY: 1 },
+            [
+                { x: 150, y: 50 }, { x: 40, y: -70 }, { x: 60, y: -10 },
+                { x: -150, y: 50 }, { x: -40, y: 70 }, { x: -20, y: 20 }
+            ],
+            'catmull', true
+        );
+        path.strokeColor = { r: 100, g: 150, b: 255, a: 255 };
+        path.strokeWidth = 2.5;
+        m.add(path);
 
         return m;
     });
