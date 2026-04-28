@@ -13,6 +13,7 @@ function AnimatedRoutes() {
                     path="/"
                     element={
                         <motion.div
+                            style={{ height: "100%" }}
                             initial={{ opacity: 0, y: 20 }}
                             animate={{ opacity: 1, y: 0 }}
                             exit={{ opacity: 0, y: -20 }}
@@ -26,6 +27,7 @@ function AnimatedRoutes() {
                     path="/editor/:id"
                     element={
                         <motion.div
+                            style={{ height: "100%" }}
                             initial={{ opacity: 0, x: 50 }}
                             animate={{ opacity: 1, x: 0 }}
                             exit={{ opacity: 0, x: -50 }}
@@ -39,6 +41,7 @@ function AnimatedRoutes() {
                     path="/editor"
                     element={
                         <motion.div
+                            style={{ height: "100%" }}
                             initial={{ opacity: 0, x: 50 }}
                             animate={{ opacity: 1, x: 0 }}
                             exit={{ opacity: 0, x: -50 }}
@@ -52,6 +55,7 @@ function AnimatedRoutes() {
                     path="*"
                     element={
                         <motion.div
+                            style={{ height: "100%" }}
                             initial={{ opacity: 0, y: 20 }}
                             animate={{ opacity: 1, y: 0 }}
                             exit={{ opacity: 0, y: -20 }}
