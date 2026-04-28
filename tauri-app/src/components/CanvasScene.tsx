@@ -1,5 +1,8 @@
-import { useEffect, useLayoutEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { RasterRenderer, LineAlg } from "../lib/raster/RasterRenderer";
+import { ShapeManager } from "../lib/shapes/ShapeManager";
+import { Rect, Line, Oval } from "../lib/shapes";
+import { RendererAdapter } from "../lib/shapes/RendererAdapter";
 
 interface CanvasSceneProps {
     lineAlg: LineAlg;
@@ -9,6 +12,43 @@ const CanvasScene = ({ lineAlg }: CanvasSceneProps) => {
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const containerRef = useRef<HTMLDivElement | null>(null);
     const rendererRef = useRef<RasterRenderer | null>(null);
+    const [manager] = useState(() => {
+        const m = new ShapeManager();
+
+        // Прямоугольник (синий, повёрнут)
+        const rect = new Rect(
+            "rect1",
+            { x: 200, y: 200, rotation: 0.3, scaleX: 1, scaleY: 1 },
+            120, 80
+        );
+        rect.fillColor = { r: 70, g: 130, b: 200, a: 200 };
+        rect.strokeColor = { r: 0, g: 0, b: 0, a: 255 };
+        rect.strokeWidth = 2;
+        m.add(rect);
+
+        // Овал (зелёный, перекрывает правую половину прямоугольника)
+        const oval = new Oval(
+            "oval1",
+            { x: 260, y: 200, rotation: 0, scaleX: 1, scaleY: 1 },
+            70, 50
+        );
+        oval.fillColor = { r: 50, g: 200, b: 100, a: 180 };
+        oval.strokeColor = { r: 0, g: 0, b: 0, a: 255 };
+        oval.strokeWidth = 1.5;
+        m.add(oval);
+
+        // Линия (красная, отдельно)
+        const line = new Line(
+            "line1",
+            { x: 450, y: 250, rotation: 0, scaleX: 1, scaleY: 1 },
+            0, 0, 150, -50
+        );
+        line.strokeColor = { r: 0, g: 128, b: 0, a: 255 };
+        line.strokeWidth = 10;
+        m.add(line);
+
+        return m;
+    });
 
     useEffect(() => {
         if (rendererRef.current) {
@@ -19,99 +59,37 @@ const CanvasScene = ({ lineAlg }: CanvasSceneProps) => {
     useLayoutEffect(() => {
         const canvas = canvasRef.current;
         const container = containerRef.current;
-
         if (!canvas || !container) return;
 
         const renderer = new RasterRenderer(canvas);
         renderer.setLineAlgorithm(lineAlg);
         rendererRef.current = renderer;
+        const adapter = new RendererAdapter(renderer);
 
-        const resizeNow = (w: number, h: number) => {
-            renderer.resizeTo(w, h);
-        };
-
+        const resizeNow = (w: number, h: number) => renderer.resizeTo(w, h);
         const ro = new ResizeObserver((entries) => {
             const entry = entries[0];
             if (!entry) return;
-
             const { width, height } = entry.contentRect;
-
-            requestAnimationFrame(() => {
-                resizeNow(width, height);
-            });
+            requestAnimationFrame(() => resizeNow(width, height));
         });
-
         ro.observe(container);
-
-        // Первый resize после layout
         requestAnimationFrame(() => {
             const rect = container.getBoundingClientRect();
             resizeNow(rect.width, rect.height);
         });
 
         let raf = 0;
-
         const frame = () => {
             const r = rendererRef.current;
             if (r) {
                 r.beginFrame(true);
-
-                const W = r.width;
-                const H = r.height;
-                const minSide = Math.min(W, H);
-
-                const black = { r: 0, g: 0, b: 0, a: 255 };
-                const green = { r: 62, g: 180, b: 120, a: 255 };
-                const blue = { r: 60, g: 110, b: 220, a: 255 };
-                const redTransparent = { r: 255, g: 0, b: 0, a: 140 };
-                const orange = { r: 240, g: 160, b: 60, a: 255 };
-                const purple = { r: 145, g: 70, b: 210, a: 255 };
-
-                const pad = Math.max(18, Math.round(minSide * 0.06));
-
-                const triangle = [
-                    { x: pad * 1.2, y: pad * 1.4 },
-                    { x: W * 0.30, y: pad * 1.5 },
-                    { x: W * 0.14, y: H * 0.32 },
-                ];
-                r.fillPolygon(triangle, green);
-                r.strokePolygon(triangle, black, Math.max(6, Math.round(minSide * 0.02)));
-
-                const square = [
-                    { x: W * 0.56, y: H * 0.16 },
-                    { x: W * 0.84, y: H * 0.16 },
-                    { x: W * 0.84, y: H * 0.42 },
-                    { x: W * 0.56, y: H * 0.42 },
-                ];
-                r.fillPolygon(square, blue);
-
-                // Полупрозрачность через blendPixel
-                r.fillCircle(W * 0.70, H * 0.16, Math.max(30, minSide * 0.10), redTransparent);
-                r.strokePolygon(square, black, Math.max(4, Math.round(minSide * 0.012)));
-
-                // Толстая ломаная
-                r.strokeLine(W * 0.12, H * 0.72, W * 0.26, H * 0.63, orange, Math.max(12, minSide * 0.025));
-                r.strokeLine(W * 0.26, H * 0.63, W * 0.40, H * 0.78, orange, Math.max(12, minSide * 0.025));
-                r.strokeLine(W * 0.40, H * 0.78, W * 0.56, H * 0.68, orange, Math.max(12, minSide * 0.025));
-
-                // Линии для сравнения алгоритмов
-                r.drawLine(W * 0.08, H * 0.08, W * 0.92, H * 0.12, black);
-                r.drawLine(W * 0.08, H * 0.52, W * 0.92, H * 0.38, purple);
-
-                // Окружность
-                r.fillCircle(W * 0.85, H * 0.70, Math.max(28, minSide * 0.08), {
-                    r: 255,
-                    g: 120,
-                    b: 0,
-                    a: 255,
-                });
-
+                const shapes = manager.getShapes();
+                shapes.forEach(shape => shape.draw(adapter));
                 r.commit();
             }
-
             raf = requestAnimationFrame(frame);
         };
-
         raf = requestAnimationFrame(frame);
 
         return () => {
@@ -120,11 +98,40 @@ const CanvasScene = ({ lineAlg }: CanvasSceneProps) => {
             renderer.dispose();
             rendererRef.current = null;
         };
-    }, [lineAlg]);
+    }, [manager, lineAlg]);
+
+    const handleCanvasClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
+        const canvas = canvasRef.current;
+        const renderer = rendererRef.current;
+        if (!canvas || !renderer) return;
+
+        const rect = canvas.getBoundingClientRect();
+        const scaleX = renderer.width / rect.width;
+        const scaleY = renderer.height / rect.height;
+        const canvasX = (e.clientX - rect.left) * scaleX;
+        const canvasY = (e.clientY - rect.top) * scaleY;
+
+        const shapes = manager.getShapes();
+        const hit = [...shapes].reverse().find(s => s.hitTest(canvasX, canvasY));
+
+        if (hit) {
+            manager.select(hit.id);
+
+            const bounds = hit.getBounds();
+            console.log(`Selected: ${hit.id}`);
+            console.log(`  Screen Bounds: minX=${bounds.minX.toFixed(1)}, minY=${bounds.minY.toFixed(1)}, maxX=${bounds.maxX.toFixed(1)}, maxY=${bounds.maxY.toFixed(1)}`);
+
+            const localBounds = hit.getLocalBounds();
+            console.log(`  Local Bounds: minX=${localBounds.minX.toFixed(1)}, minY=${localBounds.minY.toFixed(1)}, maxX=${localBounds.maxX.toFixed(1)}, maxY=${localBounds.maxY.toFixed(1)}`);
+        } else {
+            manager.clearSelection();
+            console.log("No hit");
+        }
+    };
 
     return (
         <div ref={containerRef} className="canvas-shell">
-            <canvas ref={canvasRef} className="canvas-surface" />
+            <canvas ref={canvasRef} className="canvas-surface" onClick={handleCanvasClick} />
         </div>
     );
 };
