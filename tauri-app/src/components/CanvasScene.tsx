@@ -75,7 +75,7 @@ const CanvasScene = ({ lineAlg }: CanvasSceneProps) => {
         cbez.strokeWidth = 3;
         m.add(cbez);
 
-        // PathBezier (замкнутый путь в режиме catmull)
+        // PathBezier
         const path = new PathBezier("path1",
             { x: 650, y: 300, rotation: 0, scaleX: 1, scaleY: 1 },
             [
@@ -83,6 +83,8 @@ const CanvasScene = ({ lineAlg }: CanvasSceneProps) => {
                 { x: -150, y: 50 }, { x: -40, y: 70 }, { x: -20, y: 20 }
             ],
             'catmull', true
+            // 'polyline', true
+            // 'bezier', true
         );
         path.strokeColor = { r: 100, g: 150, b: 255, a: 255 };
         path.strokeWidth = 2.5;
