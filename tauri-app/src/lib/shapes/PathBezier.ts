@@ -4,7 +4,7 @@ import type { Transform, Bounds, Point, IRenderer } from './types';
 export type PathMode = 'polyline' | 'bezier' | 'catmull';
 
 export class PathBezier extends Shape {
-    public points: Point[] = [];      // локальные опорные точки
+    public points: Point[] = [];
     public mode: PathMode = 'polyline';
     public closed: boolean = false;
 
@@ -15,76 +15,121 @@ export class PathBezier extends Shape {
         this.closed = closed;
     }
 
-    // Преобразование Catmull-Rom (tension=0.5) в кубические сегменты (в локальных коорд.)
+    // --------------------- Вспомогательные методы ---------------------
+
+    /** Catmull-Rom -> кубические сегменты Безье (локальные координаты) */
     private catmullToBeziers(): Point[][] {
         const pts = this.points;
         if (pts.length < 2) return [];
-        const segments: Point[][] = [];
         const n = pts.length;
-        // Для замкнутого контура зацикливаем индексы
         const get = (i: number) => pts[(i + n) % n];
         const count = this.closed ? n : n - 1;
+        const segments: Point[][] = [];
+
         for (let i = 0; i < count; i++) {
             const p0 = this.closed ? get(i - 1) : (i === 0 ? pts[0] : pts[i - 1]);
             const p1 = pts[i];
             const p2 = this.closed ? get(i + 1) : (i + 1 < n ? pts[i + 1] : pts[n - 1]);
             const p3 = this.closed ? get(i + 2) : (i + 2 < n ? pts[i + 2] : pts[n - 1]);
 
+            const tension = 0.5;
             const cp1: Point = {
-                x: p1.x + (p2.x - p0.x) / 6,
-                y: p1.y + (p2.y - p0.y) / 6,
+                x: p1.x + (p2.x - p0.x) * tension / 2,
+                y: p1.y + (p2.y - p0.y) * tension / 2,
             };
             const cp2: Point = {
-                x: p2.x - (p3.x - p1.x) / 6,
-                y: p2.y - (p3.y - p1.y) / 6,
+                x: p2.x - (p3.x - p1.x) * tension / 2,
+                y: p2.y - (p3.y - p1.y) * tension / 2,
             };
             segments.push([p1, cp1, cp2, p2]);
         }
         return segments;
     }
 
-    // Получение экранной ломаной (аппроксимация всего пути)
-    getFlattenedDevice(segmentsPerCurve = 32): Point[] {
-        const devicePoints: Point[] = [];
-        const transformPoint = (p: Point) => this.transformPointToDevice(p.x, p.y);
+    /** Аппроксимация одного кубического сегмента в экранных координатах */
+    private cubicToPoints(P0: Point, P1: Point, P2: Point, P3: Point, segments: number): Point[] {
+        const pts: Point[] = [];
+        const transform = (p: Point) => this.transformPointToDevice(p.x, p.y);
+        const dp0 = transform(P0);
+        const dp1 = transform(P1);
+        const dp2 = transform(P2);
+        const dp3 = transform(P3);
 
-        if (this.mode === 'polyline') {
-            for (const pt of this.points) devicePoints.push(transformPoint(pt));
-        } else if (this.mode === 'bezier') {
-            // Интерпретируем точки как последовательность кубических сегментов: p0,cp1,cp2,p3, ...
-            const pts = this.points;
-            for (let i = 0; i + 3 < pts.length; i += 4) {
-                const P0 = transformPoint(pts[i]);
-                const P1 = transformPoint(pts[i + 1]);
-                const P2 = transformPoint(pts[i + 2]);
-                const P3 = transformPoint(pts[i + 3]);
-                for (let s = 0; s <= segmentsPerCurve; s++) {
-                    const t = s / segmentsPerCurve;
-                    const mt = 1 - t;
-                    const x = mt * mt * mt * P0.x + 3 * mt * mt * t * P1.x + 3 * mt * t * t * P2.x + t * t * t * P3.x;
-                    const y = mt * mt * mt * P0.y + 3 * mt * mt * t * P1.y + 3 * mt * t * t * P2.y + t * t * t * P3.y;
-                    devicePoints.push({ x, y });
-                }
-            }
-        } else if (this.mode === 'catmull') {
-            const bezierSegments = this.catmullToBeziers();
-            for (const [P0, P1, P2, P3] of bezierSegments) {
-                const dp0 = transformPoint(P0);
-                const dp1 = transformPoint(P1);
-                const dp2 = transformPoint(P2);
-                const dp3 = transformPoint(P3);
-                for (let s = 0; s <= segmentsPerCurve; s++) {
-                    const t = s / segmentsPerCurve;
-                    const mt = 1 - t;
-                    const x = mt * mt * mt * dp0.x + 3 * mt * mt * t * dp1.x + 3 * mt * t * t * dp2.x + t * t * t * dp3.x;
-                    const y = mt * mt * mt * dp0.y + 3 * mt * mt * t * dp1.y + 3 * mt * t * t * dp2.y + t * t * t * dp3.y;
-                    devicePoints.push({ x, y });
-                }
-            }
+        for (let i = 0; i <= segments; i++) {
+            const t = i / segments;
+            const mt = 1 - t;
+            const x = mt*mt*mt*dp0.x + 3*mt*mt*t*dp1.x + 3*mt*t*t*dp2.x + t*t*t*dp3.x;
+            const y = mt*mt*mt*dp0.y + 3*mt*mt*t*dp1.y + 3*mt*t*t*dp2.y + t*t*t*dp3.y;
+            pts.push({ x, y });
         }
-        return devicePoints;
+        return pts;
     }
 
+    /** Вычисление экранной ломаной для всего пути */
+    getFlattenedDevice(segmentsPerCurve = 32): Point[] {
+        const result: Point[] = [];
+        const pts = this.points;
+
+        if (this.mode === 'polyline') {
+            const end = this.closed ? pts.length : pts.length - 1;
+            for (let i = 0; i < end; i++) {
+                result.push(this.transformPointToDevice(pts[i].x, pts[i].y));
+            }
+            if (this.closed && pts.length > 0) {
+                result.push(this.transformPointToDevice(pts[0].x, pts[0].y));
+            }
+        }
+        else if (this.mode === 'bezier') {
+            const pts = this.points;
+
+            const segments: Point[][] = [];
+            const n = pts.length;
+
+            for (let i = 0; i < n - 1; i++) {
+                const p0 = pts[i === 0 ? i : i - 1];
+                const p1 = pts[i];
+                const p2 = pts[i + 1];
+                const p3 = i + 2 < n ? pts[i + 2] : pts[i + 1];
+
+                const t = 0.5; // 🔥 ОБЯЗАТЕЛЬНО как у препода
+
+                const cp1 = {
+                    x: p1.x + (p2.x - p0.x) * t * 0.5,
+                    y: p1.y + (p2.y - p0.y) * t * 0.5,
+                };
+
+                const cp2 = {
+                    x: p2.x - (p3.x - p1.x) * t * 0.5,
+                    y: p2.y - (p3.y - p1.y) * t * 0.5,
+                };
+
+                segments.push([p1, cp1, cp2, p2]);
+            }
+
+            for (const [P0, P1, P2, P3] of segments) {
+                const segmentPoints = this.cubicToPoints(
+                    P0, P1, P2, P3, segmentsPerCurve
+                );
+
+                if (result.length > 0) result.pop();
+                result.push(...segmentPoints);
+            }
+        }
+        else if (this.mode === 'catmull') {
+            const bezSegments = this.catmullToBeziers();
+            for (let i = 0; i < bezSegments.length; i++) {
+                const [P0, P1, P2, P3] = bezSegments[i];
+                const segmentPoints = this.cubicToPoints(P0, P1, P2, P3, segmentsPerCurve);
+                if (result.length > 0 && segmentPoints.length > 0) {
+                    result.pop();
+                }
+                result.push(...segmentPoints);
+            }
+        }
+        return result;
+    }
+
+    // --------------------- Отрисовка ---------------------
     override draw(r: IRenderer): void {
         const stroke = this.getEffectiveStrokeColor();
         if (!stroke || this.strokeWidth <= 0) return;
@@ -93,31 +138,74 @@ export class PathBezier extends Shape {
         r.strokePolygon(flat, stroke, this.strokeWidth, this.closed);
     }
 
+    // --------------------- Hit‑тест ---------------------
     override hitTest(px: number, py: number): boolean {
-        const flat = this.getFlattenedDevice();
+        const local = this.transformPointToLocal(px, py);
+        if (!local) return false;
         const threshold = Math.max(5, this.strokeWidth / 2 + 2);
-        let minDist = Infinity;
-        const count = this.closed ? flat.length : flat.length - 1;
-        for (let i = 0; i < count; i++) {
-            const a = flat[i];
-            const b = flat[(i + 1) % flat.length];
-            const dx = b.x - a.x, dy = b.y - a.y;
-            const lenSq = dx * dx + dy * dy;
-            let dist: number;
-            if (lenSq === 0) {
-                dist = Math.hypot(px - a.x, py - a.y);
-            } else {
-                let t = ((px - a.x) * dx + (py - a.y) * dy) / lenSq;
-                t = Math.max(0, Math.min(1, t));
-                const projX = a.x + t * dx;
-                const projY = a.y + t * dy;
-                dist = Math.hypot(px - projX, py - projY);
+
+        if (this.mode === 'polyline') {
+            return this.hitTestPolyline(local, threshold);
+        } else if (this.mode === 'bezier') {
+            const bezierCount = Math.floor(this.points.length / 4);
+            for (let i = 0; i < bezierCount; i++) {
+                const base = i * 4;
+                if (this.hitTestCubicBezier(local, this.points[base], this.points[base+1], this.points[base+2], this.points[base+3], threshold))
+                    return true;
             }
-            if (dist < minDist) minDist = dist;
+            return false;
+        } else if (this.mode === 'catmull') {
+            const segs = this.catmullToBeziers();
+            for (const [p0, p1, p2, p3] of segs) {
+                if (this.hitTestCubicBezier(local, p0, p1, p2, p3, threshold)) return true;
+            }
+            return false;
         }
-        return minDist <= threshold;
+        return false;
     }
 
+    private hitTestPolyline(localPt: Point, threshold: number): boolean {
+        const pts = this.points;
+        for (let i = 0; i < pts.length - 1; i++) {
+            if (this.distToSegment(localPt, pts[i], pts[i+1]) <= threshold) return true;
+        }
+        if (this.closed && pts.length > 1) {
+            if (this.distToSegment(localPt, pts[pts.length-1], pts[0]) <= threshold) return true;
+        }
+        return false;
+    }
+
+    private hitTestCubicBezier(localPt: Point, p0: Point, p1: Point, p2: Point, p3: Point, threshold: number): boolean {
+        const steps = 50;
+        for (let i = 0; i < steps; i++) {
+            const t1 = i / steps;
+            const t2 = (i + 1) / steps;
+            const pt1 = this.evalCubic(t1, p0, p1, p2, p3);
+            const pt2 = this.evalCubic(t2, p0, p1, p2, p3);
+            if (this.distToSegment(localPt, pt1, pt2) <= threshold) return true;
+        }
+        return false;
+    }
+
+    private evalCubic(t: number, p0: Point, p1: Point, p2: Point, p3: Point): Point {
+        const mt = 1 - t;
+        return {
+            x: mt*mt*mt*p0.x + 3*mt*mt*t*p1.x + 3*mt*t*t*p2.x + t*t*t*p3.x,
+            y: mt*mt*mt*p0.y + 3*mt*mt*t*p1.y + 3*mt*t*t*p2.y + t*t*t*p3.y,
+        };
+    }
+
+    private distToSegment(p: Point, a: Point, b: Point): number {
+        const dx = b.x - a.x, dy = b.y - a.y;
+        const lenSq = dx*dx + dy*dy;
+        if (lenSq === 0) return Math.hypot(p.x - a.x, p.y - a.y);
+        let t = ((p.x - a.x)*dx + (p.y - a.y)*dy) / lenSq;
+        t = Math.max(0, Math.min(1, t));
+        const projX = a.x + t*dx, projY = a.y + t*dy;
+        return Math.hypot(p.x - projX, p.y - projY);
+    }
+
+    // --------------------- Границы ---------------------
     override getLocalBounds(): Bounds {
         if (this.points.length === 0) return { minX: 0, minY: 0, maxX: 0, maxY: 0 };
         const xs = this.points.map(p => p.x);
@@ -143,7 +231,7 @@ export class PathBezier extends Shape {
         };
     }
 
-    // Редактирование
+    // --------------------- Редактирование ---------------------
     addPoint(localPt: Point, index?: number): void {
         if (index !== undefined) this.points.splice(index, 0, localPt);
         else this.points.push(localPt);
@@ -190,3 +278,4 @@ export class PathBezier extends Shape {
         };
     }
 }
+
