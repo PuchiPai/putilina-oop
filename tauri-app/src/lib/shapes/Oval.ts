@@ -21,12 +21,14 @@ export class Oval extends Shape {
     }
 
     override getBounds(): Bounds {
-        const angles = [0, Math.PI / 2, Math.PI, 3 * Math.PI / 2];
-        const pts = angles.map(a => {
-            const lx = this.radiusX * Math.cos(a);
-            const ly = this.radiusY * Math.sin(a);
-            return this.transformPointToDevice(lx, ly);
-        });
+        const steps = 64; // больше точек -> точнее границы
+        const pts: Point[] = [];
+        for (let i = 0; i <= steps; i++) {
+            const t = (i / steps) * 2 * Math.PI;
+            const lx = this.radiusX * Math.cos(t);
+            const ly = this.radiusY * Math.sin(t);
+            pts.push(this.transformPointToDevice(lx, ly));
+        }
         const xs = pts.map(p => p.x);
         const ys = pts.map(p => p.y);
         return {

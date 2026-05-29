@@ -31,6 +31,37 @@ export class ShapeManager {
         return this.shapes.filter(s => this.selectedIds.has(s.id));
     }
 
+    // --- методы для работы со слоями ---
+    moveUp(id: string): void {
+        const idx = this.shapes.findIndex(s => s.id === id);
+        if (idx >= 0 && idx < this.shapes.length - 1) {
+            [this.shapes[idx], this.shapes[idx + 1]] = [this.shapes[idx + 1], this.shapes[idx]];
+        }
+    }
+
+    moveDown(id: string): void {
+        const idx = this.shapes.findIndex(s => s.id === id);
+        if (idx > 0) {
+            [this.shapes[idx - 1], this.shapes[idx]] = [this.shapes[idx], this.shapes[idx - 1]];
+        }
+    }
+
+    moveToTop(id: string): void {
+        const idx = this.shapes.findIndex(s => s.id === id);
+        if (idx >= 0 && idx < this.shapes.length - 1) {
+            const [item] = this.shapes.splice(idx, 1);
+            this.shapes.push(item);
+        }
+    }
+
+    moveToBottom(id: string): void {
+        const idx = this.shapes.findIndex(s => s.id === id);
+        if (idx > 0) {
+            const [item] = this.shapes.splice(idx, 1);
+            this.shapes.unshift(item);
+        }
+    }
+
     toJSON(): any[] {
         return this.shapes.map(s => s.toJSON());
     }

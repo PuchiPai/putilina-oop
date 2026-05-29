@@ -3,6 +3,7 @@ import { useNavigate, useParams } from "react-router-dom";
 import { ArrowLeft, Save, MousePointer, Square, Circle } from "lucide-react";
 import CanvasScene from "../components/CanvasScene";
 
+
 export default function Editor() {
     const navigate = useNavigate();
     const params = useParams<{ id?: string }>();
