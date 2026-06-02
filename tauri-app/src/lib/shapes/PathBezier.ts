@@ -265,6 +265,35 @@ export class PathBezier extends Shape {
         return cloned;
     }
 
+    // в теле класса PathBezier
+    private static pointToSegmentDist(px: number, py: number, x1: number, y1: number, x2: number, y2: number): number {
+        const dx = x2 - x1, dy = y2 - y1;
+        const lenSq = dx * dx + dy * dy;
+        if (lenSq === 0) return Math.hypot(px - x1, py - y1);
+        let t = ((px - x1) * dx + (py - y1) * dy) / lenSq;
+        t = Math.max(0, Math.min(1, t));
+        const projX = x1 + t * dx, projY = y1 + t * dy;
+        return Math.hypot(px - projX, py - projY);
+    }
+
+    insertPointNear(localPt: Point): void {
+        const pts = this.points;
+        if (pts.length <= 1) {
+            this.addPoint(localPt);
+            return;
+        }
+        let minDist = Infinity, insertIndex = 0;
+        for (let i = 0; i < pts.length - 1; i++) {
+            const d = PathBezier.pointToSegmentDist(localPt.x, localPt.y, pts[i].x, pts[i].y, pts[i+1].x, pts[i+1].y);
+            if (d < minDist) { minDist = d; insertIndex = i; }
+        }
+        if (this.closed) {
+            const d = PathBezier.pointToSegmentDist(localPt.x, localPt.y, pts[pts.length-1].x, pts[pts.length-1].y, pts[0].x, pts[0].y);
+            if (d < minDist) insertIndex = pts.length - 1;
+        }
+        this.addPoint(localPt, insertIndex + 1);
+    }
+
     override toJSON(): any {
         return {
             id: this.id,

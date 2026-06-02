@@ -1,13 +1,22 @@
 import { useEffect, useLayoutEffect, useRef, useState, useCallback } from "react";
 import { RasterRenderer, LineAlg } from "../lib/raster/RasterRenderer";
+import { RendererAdapter } from "../lib/shapes/RendererAdapter";
 import { ShapeManager } from "../lib/shapes/ShapeManager";
 import { Rect, Line, Oval, Triangle, QuadraticBezier, CubicBezier, PathBezier } from "../lib/shapes";
-import { RendererAdapter } from "../lib/shapes/RendererAdapter";
-import type { Point } from "../lib/shapes/types";
+import type { Point, Bounds } from "../lib/shapes/types";
 import type { Shape } from "../lib/shapes/Shape";
-import { Toolbar } from "./Toolbar";
 import { LayerPanel } from "./LayerPanel";
+import { mat3, type Mat3 } from "../lib/math/mat3";
 
+type CanvasTool = "select" | "rect" | "oval" | "line" | "triangle" | "quadraticBezier" | "cubicBezier" | "pathBezier";
+
+interface CanvasSceneProps {
+    lineAlg: LineAlg;
+    activeTool: CanvasTool;
+    onSelectionChange?: (shape: Shape | null) => void;
+}
+
+// вспомогательные функции
 function pointToSegmentDist(px: number, py: number, x1: number, y1: number, x2: number, y2: number): number {
     const dx = x2 - x1, dy = y2 - y1;
     const lenSq = dx * dx + dy * dy;
@@ -18,201 +27,371 @@ function pointToSegmentDist(px: number, py: number, x1: number, y1: number, x2: 
     return Math.hypot(px - projX, py - projY);
 }
 
-// ──────────────── типы для операций перетаскивания ────────────────
-type InteractionMode = 'idle' | 'move' | 'resize' | 'rotate' | 'editPoints';
+// константы
+const HANDLE_SIZE = 8;
+const ROTATION_HANDLE_DISTANCE = 40;
+const MIN_SIZE = 10;
 
-interface DragState {
-    mode: InteractionMode;
-    shapeId: string;
-    startPointer: Point;                    // физические координаты canvas
-    startTransform: { x: number; y: number; rotation: number; scaleX: number; scaleY: number };
-    startBounds?: { minX: number; minY: number; maxX: number; maxY: number };
-    handleIndex?: number;                  // для resize/rotate
-    controlPointIndex?: number;            // для editPoints
+// типы
+type EditorMode = "idle" | "move" | "resize" | "rotate" | "editPoints" | "addPoint";
+type ResizeHandle = "nw" | "n" | "ne" | "e" | "se" | "s" | "sw" | "w" | null;
+
+interface ShapeStartData {
+    x: number;
+    y: number;
+    scaleX: number;
+    scaleY: number;
+    rotation: number;
+    width?: number;
+    height?: number;
+    startLocalBounds?: Bounds;
+    startInvMatrix?: Mat3;
 }
 
-// ──────────────── утилита пересчёта координат ────────────────
-function getCanvasPoint(
-    e: React.MouseEvent<HTMLCanvasElement>,
-    canvas: HTMLCanvasElement,
-    renderer: RasterRenderer
-): Point {
+interface HistoryState {
+    shapes: Shape[];
+    selectedShapeId: string | null;
+}
+
+// утилиты координат
+function getDeviceCoordinates(clientX: number, clientY: number, canvas: HTMLCanvasElement): Point {
     const rect = canvas.getBoundingClientRect();
-    const scaleX = renderer.width / rect.width;
-    const scaleY = renderer.height / rect.height;
+    const dpr = window.devicePixelRatio || 1;
     return {
-        x: (e.clientX - rect.left) * scaleX,
-        y: (e.clientY - rect.top) * scaleY,
+        x: (clientX - rect.left) * dpr,
+        y: (clientY - rect.top) * dpr,
     };
 }
 
-// ──────────────── константы визуализации ручек ────────────────
-const HANDLE_RADIUS = 6;
-const ROTATE_HANDLE_OFFSET = 30;
+// создание фигуры по инструменту
+function createShapeByTool(tool: CanvasTool, id: string, point: Point): Shape | null {
+    const transform = { x: point.x, y: point.y, rotation: 0, scaleX: 1, scaleY: 1 };
+    switch (tool) {
+        case "rect": {
+            const r = new Rect(id, transform, 100, 60);
+            r.fillColor = { r: 100, g: 150, b: 200, a: 200 };
+            r.strokeColor = { r: 0, g: 0, b: 0, a: 255 };
+            r.strokeWidth = 2;
+            return r;
+        }
+        case "oval": {
+            const o = new Oval(id, transform, 50, 50);
+            o.fillColor = { r: 100, g: 200, b: 100, a: 200 };
+            o.strokeColor = { r: 0, g: 0, b: 0, a: 255 };
+            o.strokeWidth = 2;
+            return o;
+        }
+        case "line": {
+            const l = new Line(id, transform, 0, 0, 150, 0);
+            l.strokeColor = { r: 0, g: 128, b: 0, a: 255 };
+            l.strokeWidth = 4;
+            return l;
+        }
+        case "triangle": {
+            const tri = new Triangle(id, transform, 0, -40, 40, 30, -40, 30);
+            tri.fillColor = { r: 255, g: 160, b: 60, a: 200 };
+            tri.strokeColor = { r: 0, g: 0, b: 0, a: 255 };
+            tri.strokeWidth = 2;
+            return tri;
+        }
+        case "quadraticBezier": {
+            const q = new QuadraticBezier(id, transform, { x: 0, y: 0 }, { x: 50, y: -80 }, { x: 100, y: 0 });
+            q.strokeColor = { r: 200, g: 100, b: 200, a: 255 };
+            q.strokeWidth = 3;
+            return q;
+        }
+        case "cubicBezier": {
+            const c = new CubicBezier(id, transform, { x: 0, y: 0 }, { x: 30, y: -100 }, { x: 70, y: 100 }, { x: 100, y: 0 });
+            c.strokeColor = { r: 100, g: 200, b: 100, a: 255 };
+            c.strokeWidth = 3;
+            return c;
+        }
+        case "pathBezier": {
+            const p = new PathBezier(
+                id,
+                transform,
+                [
+                    { x: -50, y: 0 },
+                    { x: 0, y: -50 },
+                    { x: 50, y: 0 },
+                    { x: 30, y: 30 },
+                    { x: -30, y: 30 }
+                ],
+                "catmull",
+                true
+            );
+            p.strokeColor = { r: 100, g: 150, b: 255, a: 255 };
+            p.strokeWidth = 2.5;
+            return p;
+        }
+        default:
+            return null;
+    }
+}
 
-// Позиции 8 ручек ресайза
-function getHandlePositions(bounds: { minX: number; minY: number; maxX: number; maxY: number }): Point[] {
-    const cx = (bounds.minX + bounds.maxX) / 2;
-    const cy = (bounds.minY + bounds.maxY) / 2;
-    return [
-        { x: bounds.minX, y: bounds.minY }, // левый верхний
-        { x: cx, y: bounds.minY },          // верхний центр
-        { x: bounds.maxX, y: bounds.minY }, // правый верхний
-        { x: bounds.maxX, y: cy },          // правый центр
-        { x: bounds.maxX, y: bounds.maxY }, // правый нижний
-        { x: cx, y: bounds.maxY },          // нижний центр
-        { x: bounds.minX, y: bounds.maxY }, // левый нижний
-        { x: bounds.minX, y: cy },          // левый центр
+// получение углов bounding box в экранных координатах (вращающаяся рамка)
+function getShapeBoundsCorners(shape: Shape): Point[] {
+    const local = shape.getLocalBounds();
+    const corners: Point[] = [
+        { x: local.minX, y: local.minY },
+        { x: local.maxX, y: local.minY },
+        { x: local.maxX, y: local.maxY },
+        { x: local.minX, y: local.maxY },
     ];
+    return corners.map(p => shape.transformPointToDevice(p.x, p.y));
 }
 
-function getRotateHandle(bounds: { minX: number; minY: number; maxX: number; maxY: number }): Point {
-    const cx = (bounds.minX + bounds.maxX) / 2;
-    return { x: cx, y: bounds.minY - ROTATE_HANDLE_OFFSET };
+// определение ручки под курсором
+function getHandleAtPoint(shape: Shape, px: number, py: number): ResizeHandle | "rotate" | null {
+    const corners = getShapeBoundsCorners(shape);
+    const handles: [ResizeHandle, Point][] = [
+        ["nw", corners[0]],
+        ["n", { x: (corners[0].x + corners[1].x) / 2, y: (corners[0].y + corners[1].y) / 2 }],
+        ["ne", corners[1]],
+        ["e", { x: (corners[1].x + corners[2].x) / 2, y: (corners[1].y + corners[2].y) / 2 }],
+        ["se", corners[2]],
+        ["s", { x: (corners[2].x + corners[3].x) / 2, y: (corners[2].y + corners[3].y) / 2 }],
+        ["sw", corners[3]],
+        ["w", { x: (corners[3].x + corners[0].x) / 2, y: (corners[3].y + corners[0].y) / 2 }],
+    ];
+
+    for (const [handle, pos] of handles) {
+        if (Math.hypot(px - pos.x, py - pos.y) <= HANDLE_SIZE) return handle;
+    }
+
+    // ручка поворота
+    const topCenter = { x: (corners[0].x + corners[1].x) / 2, y: (corners[0].y + corners[1].y) / 2 };
+    const dir = Math.atan2(corners[1].y - corners[0].y, corners[1].x - corners[0].x);
+    const normal = { x: -Math.sin(dir), y: Math.cos(dir) };
+    const rx = topCenter.x + normal.x * ROTATION_HANDLE_DISTANCE;
+    const ry = topCenter.y + normal.y * ROTATION_HANDLE_DISTANCE;
+    if (Math.hypot(px - rx, py - ry) <= HANDLE_SIZE) return "rotate";
+    return null;
 }
 
-// ──────────────── компонент ────────────────
-interface CanvasSceneProps {
-    lineAlg: LineAlg;
+// индекс контрольной точки под курсором
+function getPointIndexAtPosition(shape: Shape, px: number, py: number): number | null {
+    if (!("getControlPoints" in shape)) return null;
+    const pts = (shape as any).getControlPoints() as Point[];
+    for (let i = 0; i < pts.length; i++) {
+        const d = shape.transformPointToDevice(pts[i].x, pts[i].y);
+        if (Math.hypot(px - d.x, py - d.y) <= HANDLE_SIZE + 2) return i;
+    }
+    return null;
 }
 
-export const CanvasScene = ({ lineAlg }: CanvasSceneProps) => {
+function getResizeAnchor(bounds: Bounds, handle: ResizeHandle): Point {
+    switch (handle) {
+        case "nw": return { x: bounds.maxX, y: bounds.maxY };
+        case "n": return { x: (bounds.minX + bounds.maxX) / 2, y: bounds.maxY };
+        case "ne": return { x: bounds.minX, y: bounds.maxY };
+        case "e": return { x: bounds.minX, y: (bounds.minY + bounds.maxY) / 2 };
+        case "se": return { x: bounds.minX, y: bounds.minY };
+        case "s": return { x: (bounds.minX + bounds.maxX) / 2, y: bounds.minY };
+        case "sw": return { x: bounds.maxX, y: bounds.minY };
+        case "w": return { x: bounds.maxX, y: (bounds.minY + bounds.maxY) / 2 };
+        default: return { x: bounds.minX, y: bounds.minY };
+    }
+}
+
+function solveTranslationKeepingAnchor(
+    shape: Shape,
+    anchorLocal: Point,
+    anchorDevice: Point,
+    scaleX: number,
+    scaleY: number
+): Point {
+    const r = shape.transform.rotation;
+    const cos = Math.cos(r);
+    const sin = Math.sin(r);
+
+    const sx = anchorLocal.x * scaleX;
+    const sy = anchorLocal.y * scaleY;
+
+    const rotatedX = cos * sx - sin * sy;
+    const rotatedY = sin * sx + cos * sy;
+
+    return {
+        x: anchorDevice.x - rotatedX,
+        y: anchorDevice.y - rotatedY,
+    };
+}
+
+// ========== компонент ==========
+export const CanvasScene = ({ lineAlg, activeTool, onSelectionChange }: CanvasSceneProps) => {
     const canvasRef = useRef<HTMLCanvasElement>(null);
-    const containerRef = useRef<HTMLDivElement | null>(null);
+    const containerRef = useRef<HTMLDivElement>(null);
     const rendererRef = useRef<RasterRenderer | null>(null);
     const adapterRef = useRef<RendererAdapter | null>(null);
 
-    // Менеджер фигур
-    const [manager] = useState(() => {
-        const m = new ShapeManager();
-        // Вставляем те же фигуры, что и раньше (можно скопировать из предыдущего кода)
-        const rect = new Rect("rect1", { x: 200, y: 200, rotation: 0.3, scaleX: 1, scaleY: 1 }, 120, 80);
-        rect.fillColor = { r: 70, g: 130, b: 200, a: 200 };
-        rect.strokeColor = { r: 0, g: 0, b: 0, a: 255 };
-        rect.strokeWidth = 2;
-        m.add(rect);
+    // менеджер фигур
+    const managerRef = useRef<ShapeManager>(new ShapeManager());
+    const manager = managerRef.current;
 
-        const oval = new Oval("oval1", { x: 260, y: 200, rotation: 0, scaleX: 1, scaleY: 1 }, 70, 50);
-        oval.fillColor = { r: 50, g: 200, b: 100, a: 180 };
-        oval.strokeColor = { r: 0, g: 0, b: 0, a: 255 };
-        oval.strokeWidth = 1.5;
-        m.add(oval);
+    const [shapes, setShapes] = useState<Shape[]>([]);
+    const [selectedShapeId, setSelectedShapeId] = useState<string | null>(null);
+    const [mode, setMode] = useState<EditorMode>("idle");
+    const [resizeHandle, setResizeHandle] = useState<ResizeHandle>(null);
+    const [hoveredHandle, setHoveredHandle] = useState<ResizeHandle | "rotate" | null>(null);
+    const [hoveredPointIndex, setHoveredPointIndex] = useState<number | null>(null);
+    const [hoveredShapeId, setHoveredShapeId] = useState<string | null>(null);
+    const [addPointPosition, setAddPointPosition] = useState<Point | null>(null);
+    const [cursorPos, setCursorPos] = useState<Point>({ x: 0, y: 0 });
 
-        const line = new Line("line1", { x: 450, y: 250, rotation: 0, scaleX: 1, scaleY: 1 }, 0, 0, 150, -50);
-        line.strokeColor = { r: 0, g: 128, b: 0, a: 255 };
-        line.strokeWidth = 10;
-        m.add(line);
+    const isAddPointMode = mode === "addPoint";
 
-        const tri = new Triangle("tri1", { x: 150, y: 250, rotation: 0, scaleX: 1, scaleY: 1 }, 0, -40, 40, 30, -40, 30);
-        tri.fillColor = { r: 255, g: 160, b: 60, a: 200 };
-        tri.strokeColor = { r: 0, g: 0, b: 0, a: 255 };
-        tri.strokeWidth = 2;
-        m.add(tri);
+    // история
+    const historyRef = useRef<HistoryState[]>([]);
+    const historyIndexRef = useRef<number>(-1);
+    const startDataRef = useRef<ShapeStartData | null>(null);
+    const startPointRef = useRef<Point | null>(null);
+    const editPointIndexRef = useRef<number | null>(null);
+    const rotateCenterRef = useRef<Point | null>(null);
 
-        const qbez = new QuadraticBezier("qbez1", { x: 300, y: 100, rotation: 0, scaleX: 1, scaleY: 1 },
-            { x: 0, y: 0 }, { x: 50, y: -80 }, { x: 100, y: 0 });
-        qbez.strokeColor = { r: 200, g: 100, b: 200, a: 255 };
-        qbez.strokeWidth = 3;
-        m.add(qbez);
+    // обновить React состояние из менеджера
+    const syncShapes = useCallback(() => {
+        setShapes(manager.getShapes());
+    }, [manager]);
 
-        const cbez = new CubicBezier("cbez1", { x: 500, y: 100, rotation: 0, scaleX: 1, scaleY: 1 },
-            { x: 0, y: 0 }, { x: 30, y: -100 }, { x: 70, y: 100 }, { x: 100, y: 0 });
-        cbez.strokeColor = { r: 100, g: 200, b: 100, a: 255 };
-        cbez.strokeWidth = 3;
-        m.add(cbez);
+    // добавить в историю
+    const addToHistory = useCallback(() => {
+        const state: HistoryState = {
+            shapes: manager.getShapes().map(s => s.clone()),
+            selectedShapeId: selectedShapeId,
+        };
+        historyRef.current = historyRef.current.slice(0, historyIndexRef.current + 1);
+        historyRef.current.push(state);
+        historyIndexRef.current++;
+    }, [manager, selectedShapeId]);
 
-        const path = new PathBezier("path1", { x: 650, y: 300, rotation: 0, scaleX: 1, scaleY: 1 },
-            [
-                { x: -100, y: 0 }, { x: 0, y: -100 },
-                { x: 100, y: 50 },
-                { x: 10, y: 100 },
-                { x: 100, y: -100 }, { x: 200, y: 0 }
-            ],
-            'catmull', true
-        );
-        path.strokeColor = { r: 100, g: 150, b: 255, a: 255 };
-        path.strokeWidth = 2.5;
-        m.add(path);
+    // undo/redo
+    const undo = useCallback(() => {
+        if (historyIndexRef.current <= 0) return;
+        historyIndexRef.current--;
+        const state = historyRef.current[historyIndexRef.current];
+        manager.loadFromJSON(state.shapes.map(s => s.toJSON()));
+        setSelectedShapeId(state.selectedShapeId);
+        syncShapes();
+    }, [manager, syncShapes]);
 
-        return m;
-    });
+    const redo = useCallback(() => {
+        if (historyIndexRef.current >= historyRef.current.length - 1) return;
+        historyIndexRef.current++;
+        const state = historyRef.current[historyIndexRef.current];
+        manager.loadFromJSON(state.shapes.map(s => s.toJSON()));
+        setSelectedShapeId(state.selectedShapeId);
+        syncShapes();
+    }, [manager, syncShapes]);
 
-    const [selectedId, setSelectedId] = useState<string | null>(null);
-    const [dragState, setDragState] = useState<DragState | null>(null);
-    // для доступа в замыкании анимации без пересоздания обработчиков
-    const dragStateRef = useRef<DragState | null>(null);
-    useEffect(() => { dragStateRef.current = dragState; }, [dragState]);
+    // создание фигуры
+    const addShape = useCallback((tool: CanvasTool, point: Point) => {
+        const id = `shape-${Date.now()}`;
+        const shape = createShapeByTool(tool, id, point);
+        if (!shape) return;
+        manager.add(shape);
+        setSelectedShapeId(id);
+        onSelectionChange?.(shape);
+        syncShapes();
+        addToHistory();
+    }, [manager, onSelectionChange, syncShapes, addToHistory]);
 
-    const selectedShape = selectedId
-        ? manager.getShapes().find(s => s.id === selectedId) ?? null
-        : null;
+    // удаление выбранной
+    const deleteSelected = useCallback(() => {
+        if (!selectedShapeId) return;
+        manager.remove(selectedShapeId);
+        setSelectedShapeId(null);
+        syncShapes();
+        addToHistory();
+    }, [selectedShapeId, manager, syncShapes, addToHistory]);
 
-    const [, setTick] = useState(0);
-    const forceUpdate = () => setTick(t => t + 1);
+    // слои
+    const moveUp = (id: string) => {
+        manager.moveUp(id);
+        syncShapes();
+        addToHistory();
+    };
+    const moveDown = (id: string) => {
+        manager.moveDown(id);
+        syncShapes();
+        addToHistory();
+    };
 
-    // ──────────────────── обработчики указателя ────────────────────
+    // указатели
     const onPointerDown = useCallback((e: React.PointerEvent<HTMLCanvasElement>) => {
         const canvas = canvasRef.current;
-        const renderer = rendererRef.current;
-        if (!canvas || !renderer) return;
+        if (!canvas) return;
+        const point = getDeviceCoordinates(e.clientX, e.clientY, canvas);
+        (e.currentTarget as HTMLCanvasElement).setPointerCapture(e.pointerId);
 
-        const point = getCanvasPoint(e, canvas, renderer);
-        const shapes = manager.getShapes();
+        if (activeTool !== "select") {
+            addShape(activeTool, point);
+            return;
+        }
 
-        // 1. Если есть выбранная фигура, проверяем, не попали ли в ручки / контрольные точки
+        const selectedShape = selectedShapeId ? manager.getShapes().find(s => s.id === selectedShapeId) : null;
+
         if (selectedShape) {
-            const bounds = selectedShape.getBounds();
-            const handles = getHandlePositions(bounds);
-            // Ручка поворота
-            const rotH = getRotateHandle(bounds);
-            if (Math.hypot(point.x - rotH.x, point.y - rotH.y) < HANDLE_RADIUS + 2) {
-                setDragState({
-                    mode: 'rotate',
-                    shapeId: selectedId!,
-                    startPointer: point,
-                    startTransform: { ...selectedShape.transform },
-                });
-                canvas.setPointerCapture(e.pointerId);
+            const handle = getHandleAtPoint(selectedShape, point.x, point.y);
+            if (handle === "rotate") {
+                setMode("rotate");
+                startPointRef.current = point;
+                startDataRef.current = {
+                    x: selectedShape.transform.x,
+                    y: selectedShape.transform.y,
+                    scaleX: selectedShape.transform.scaleX,
+                    scaleY: selectedShape.transform.scaleY,
+                    rotation: selectedShape.transform.rotation,
+                };
+                const corners = getShapeBoundsCorners(selectedShape);
+                const cx = (corners[0].x + corners[1].x + corners[2].x + corners[3].x) / 4;
+                const cy = (corners[0].y + corners[1].y + corners[2].y + corners[3].y) / 4;
+                rotateCenterRef.current = { x: cx, y: cy };
+                return;
+            } else if (handle) {
+                setMode("resize");
+                setResizeHandle(handle);
+                startPointRef.current = point;
+                const localBounds = selectedShape.getLocalBounds();
+                const invMatrix = selectedShape.getDeviceToLocalMatrix();
+                startDataRef.current = {
+                    x: selectedShape.transform.x,
+                    y: selectedShape.transform.y,
+                    scaleX: selectedShape.transform.scaleX,
+                    scaleY: selectedShape.transform.scaleY,
+                    rotation: selectedShape.transform.rotation,
+                    width: localBounds.maxX - localBounds.minX,
+                    height: localBounds.maxY - localBounds.minY,
+                    startLocalBounds: { ...localBounds },
+                    startInvMatrix: invMatrix ?? undefined,
+                };
                 return;
             }
 
-            // Ручки ресайза
-            for (let i = 0; i < handles.length; i++) {
-                if (Math.hypot(point.x - handles[i].x, point.y - handles[i].y) < HANDLE_RADIUS + 2) {
-                    setDragState({
-                        mode: 'resize',
-                        shapeId: selectedId!,
-                        startPointer: point,
-                        startTransform: { ...selectedShape.transform },
-                        startBounds: { ...bounds },
-                        handleIndex: i,
-                    });
-                    canvas.setPointerCapture(e.pointerId);
-                    return;
-                }
+            // контрольные точки
+            const ptIndex = getPointIndexAtPosition(selectedShape, point.x, point.y);
+            if (ptIndex !== null) {
+                setMode("editPoints");
+                editPointIndexRef.current = ptIndex;
+                startPointRef.current = point;
+                return;
             }
 
-            // Контрольные точки (если есть)
-            if ('getControlPoints' in selectedShape) {
-                const cpts = (selectedShape as any).getControlPoints() as Point[];
-                const deviceCpts = cpts.map((p: Point) => selectedShape.transformPointToDevice(p.x, p.y));
-                for (let i = 0; i < deviceCpts.length; i++) {
-                    if (Math.hypot(point.x - deviceCpts[i].x, point.y - deviceCpts[i].y) < HANDLE_RADIUS + 2) {
-                        setDragState({
-                            mode: 'editPoints',
-                            shapeId: selectedId!,
-                            startPointer: point,
-                            startTransform: { ...selectedShape.transform },
-                            controlPointIndex: i,
-                        });
-                        canvas.setPointerCapture(e.pointerId);
-                        return;
-                    }
-                }
+            if (selectedShape.hitTest(point.x, point.y)) {
+                setMode("move");
+                startPointRef.current = point;
+                startDataRef.current = {
+                    x: selectedShape.transform.x,
+                    y: selectedShape.transform.y,
+                    scaleX: selectedShape.transform.scaleX,
+                    scaleY: selectedShape.transform.scaleY,
+                    rotation: selectedShape.transform.rotation,
+                };
+                return;
             }
         }
 
-        // 2. Hit-test объектов (с верхнего к нижнему)
+        // hit-test объектов
+        const shapes = manager.getShapes();
         let hitShape: Shape | null = null;
         for (let i = shapes.length - 1; i >= 0; i--) {
             if (shapes[i].hitTest(point.x, point.y)) {
@@ -222,121 +401,192 @@ export const CanvasScene = ({ lineAlg }: CanvasSceneProps) => {
         }
 
         if (hitShape) {
-            setSelectedId(hitShape.id);
-            manager.select(hitShape.id);
-            // Начать перемещение
-            setDragState({
-                mode: 'move',
-                shapeId: hitShape.id,
-                startPointer: point,
-                startTransform: { ...hitShape.transform },
-            });
-            canvas.setPointerCapture(e.pointerId);
+            setSelectedShapeId(hitShape.id);
+            setMode("move");
+            startPointRef.current = point;
+            startDataRef.current = {
+                x: hitShape.transform.x,
+                y: hitShape.transform.y,
+                scaleX: hitShape.transform.scaleX,
+                scaleY: hitShape.transform.scaleY,
+                rotation: hitShape.transform.rotation,
+            };
+            onSelectionChange?.(hitShape);
         } else {
-            setSelectedId(null);
-            manager.clearSelection();
+            setSelectedShapeId(null);
+            onSelectionChange?.(null);
         }
-    }, [selectedId, selectedShape, manager]);
+    }, [activeTool, addShape, selectedShapeId, manager, onSelectionChange]);
 
     const onPointerMove = useCallback((e: React.PointerEvent<HTMLCanvasElement>) => {
         const canvas = canvasRef.current;
-        const renderer = rendererRef.current;
-        if (!canvas || !renderer) return;
+        if (!canvas) return;
+        const point = getDeviceCoordinates(e.clientX, e.clientY, canvas);
+        setCursorPos(point);
 
-        const point = getCanvasPoint(e, canvas, renderer);
-        const ds = dragStateRef.current;
-        if (!ds) return;
+        const selectedShape = selectedShapeId ? manager.getShapes().find(s => s.id === selectedShapeId) : null;
 
-        const shape = manager.getShapes().find(s => s.id === ds.shapeId);
-        if (!shape) return;
+        // режим добавления точки
+        if (isAddPointMode && selectedShape instanceof PathBezier) {
+            setAddPointPosition(point);
+            return;
+        } else {
+            setAddPointPosition(null);
+        }
 
-        const dx = point.x - ds.startPointer.x;
-        const dy = point.y - ds.startPointer.y;
+        if (!selectedShape) {
+            setHoveredHandle(null);
+            setHoveredPointIndex(null);
+            const hovered = manager.getShapes().slice().reverse().find(s => s.hitTest(point.x, point.y));
+            setHoveredShapeId(hovered?.id ?? null);
+            return;
+        }
 
-        switch (ds.mode) {
-            case 'move': {
-                shape.transform.x = ds.startTransform.x + dx;
-                shape.transform.y = ds.startTransform.y + dy;
-                break;
+        if (mode === "idle") {
+            setHoveredHandle(getHandleAtPoint(selectedShape, point.x, point.y));
+            setHoveredPointIndex(getPointIndexAtPosition(selectedShape, point.x, point.y));
+        }
+
+        if (mode === "move" && startPointRef.current && startDataRef.current) {
+            const dx = point.x - startPointRef.current.x;
+            const dy = point.y - startPointRef.current.y;
+            selectedShape.transform.x = startDataRef.current.x + dx;
+            selectedShape.transform.y = startDataRef.current.y + dy;
+            syncShapes();
+        } else if (mode === "resize" && startPointRef.current && startDataRef.current && resizeHandle) {
+            const sd = startDataRef.current;
+            if (sd.width === undefined || sd.height === undefined || !sd.startLocalBounds || !sd.startInvMatrix) return;
+
+            const oldW = sd.width;
+            const oldH = sd.height;
+            if (oldW <= 0 || oldH <= 0) return;
+
+            // движение мыши в локальных координатах фигуры
+            const inv = sd.startInvMatrix;
+            const localStart = mat3.transformPoint(inv, startPointRef.current.x, startPointRef.current.y);
+            const localCurrent = mat3.transformPoint(inv, point.x, point.y);
+            const dLocalX = localCurrent.x - localStart.x;
+            const dLocalY = localCurrent.y - localStart.y;
+
+            // считаем новую ширину/высоту в локальных координатах
+            let newW = oldW;
+            let newH = oldH;
+
+            switch (resizeHandle) {
+                case "nw":
+                    newW = oldW - dLocalX;
+                    newH = oldH - dLocalY;
+                    break;
+                case "n":
+                    newH = oldH - dLocalY;
+                    break;
+                case "ne":
+                    newW = oldW + dLocalX;
+                    newH = oldH - dLocalY;
+                    break;
+                case "e":
+                    newW = oldW + dLocalX;
+                    break;
+                case "se":
+                    newW = oldW + dLocalX;
+                    newH = oldH + dLocalY;
+                    break;
+                case "s":
+                    newH = oldH + dLocalY;
+                    break;
+                case "sw":
+                    newW = oldW - dLocalX;
+                    newH = oldH + dLocalY;
+                    break;
+                case "w":
+                    newW = oldW - dLocalX;
+                    break;
             }
-            case 'rotate': {
-                const center = shape.getCenter();
-                const startAngle = Math.atan2(ds.startPointer.y - center.y, ds.startPointer.x - center.x);
-                const currentAngle = Math.atan2(point.y - center.y, point.x - center.x);
-                shape.transform.rotation = ds.startTransform.rotation + (currentAngle - startAngle);
-                break;
-            }
-            case 'resize': {
-                if (ds.handleIndex === undefined || !ds.startBounds) break;
-                // Переводим движения в локальную систему исходной трансформации
-                const inv = shape.getDeviceToLocalMatrix();
-                if (!inv) break;
-                const localStart = shape.transformPointToLocal(ds.startPointer.x, ds.startPointer.y);
-                const localCurrent = shape.transformPointToLocal(point.x, point.y);
-                if (!localStart || !localCurrent) break;
 
-                const dLocalX = localCurrent.x - localStart.x;
-                const dLocalY = localCurrent.y - localStart.y;
-                const b = ds.startBounds;
-                let newMinX = b.minX, newMinY = b.minY, newMaxX = b.maxX, newMaxY = b.maxY;
+            // минимальный размер
+            newW = Math.max(MIN_SIZE, newW);
+            newH = Math.max(MIN_SIZE, newH);
 
-                switch (ds.handleIndex) {
-                    case 0: newMinX += dLocalX; newMinY += dLocalY; break;
-                    case 1: newMinY += dLocalY; break;
-                    case 2: newMaxX += dLocalX; newMinY += dLocalY; break;
-                    case 3: newMaxX += dLocalX; break;
-                    case 4: newMaxX += dLocalX; newMaxY += dLocalY; break;
-                    case 5: newMaxY += dLocalY; break;
-                    case 6: newMinX += dLocalX; newMaxY += dLocalY; break;
-                    case 7: newMinX += dLocalX; break;
-                }
+            // новые масштабы
+            const newScaleX = sd.scaleX * (newW / oldW);
+            const newScaleY = sd.scaleY * (newH / oldH);
 
-                // Минимальный размер
-                const minSize = 10;
-                if (newMaxX - newMinX < minSize) {
-                    if ([0, 6, 7].includes(ds.handleIndex)) newMinX = newMaxX - minSize;
-                    else newMaxX = newMinX + minSize;
-                }
-                if (newMaxY - newMinY < minSize) {
-                    if ([0, 1, 2].includes(ds.handleIndex)) newMinY = newMaxY - minSize;
-                    else newMaxY = newMinY + minSize;
-                }
+            // фиксируем опорную точку, чтобы фигура не "прыгала"
+            const anchorLocal = getResizeAnchor(sd.startLocalBounds, resizeHandle);
+            const anchorDevice = selectedShape.transformPointToDevice(anchorLocal.x, anchorLocal.y);
 
-                shape.setBounds(newMinX, newMinY, newMaxX, newMaxY);
-                break;
-            }
-            case 'editPoints': {
-                if (ds.controlPointIndex === undefined) break;
-                const localPt = shape.transformPointToLocal(point.x, point.y);
-                if (!localPt) break;
-                if ('setControlPoint' in shape) {
-                    (shape as any).setControlPoint(ds.controlPointIndex, localPt);
-                }
-                break;
+            const newTranslation = solveTranslationKeepingAnchor(
+                selectedShape,
+                anchorLocal,
+                anchorDevice,
+                newScaleX,
+                newScaleY
+            );
+
+            selectedShape.transform.scaleX = newScaleX;
+            selectedShape.transform.scaleY = newScaleY;
+            selectedShape.transform.x = newTranslation.x;
+            selectedShape.transform.y = newTranslation.y;
+
+            syncShapes();
+        } else if (mode === "rotate" && startPointRef.current && startDataRef.current && rotateCenterRef.current) {
+            const cx = rotateCenterRef.current.x;
+            const cy = rotateCenterRef.current.y;
+            const startAngle = Math.atan2(startPointRef.current.y - cy, startPointRef.current.x - cx);
+            const currentAngle = Math.atan2(point.y - cy, point.x - cx);
+            selectedShape.transform.rotation = startDataRef.current.rotation + (currentAngle - startAngle);
+            syncShapes();
+        } else if (mode === "editPoints" && editPointIndexRef.current !== null && startPointRef.current) {
+            const localPt = selectedShape.transformPointToLocal(point.x, point.y);
+            if (localPt) {
+                (selectedShape as any).setControlPoint(editPointIndexRef.current, localPt);
+                syncShapes();
             }
         }
-    }, [manager]);
+    }, [mode, resizeHandle, selectedShapeId, manager, syncShapes, isAddPointMode]);
 
     const onPointerUp = useCallback((e: React.PointerEvent<HTMLCanvasElement>) => {
-        const canvas = canvasRef.current;
-        if (canvas) canvas.releasePointerCapture(e.pointerId);
-        setDragState(null);
-    }, []);
+        (e.currentTarget as HTMLCanvasElement).releasePointerCapture(e.pointerId);
+        if (mode !== "idle") addToHistory();
+        setMode("idle");
+        setResizeHandle(null);
+        startPointRef.current = null;
+        startDataRef.current = null;
+        editPointIndexRef.current = null;
+        rotateCenterRef.current = null;
+    }, [mode, addToHistory]);
 
-    // ──────────────────── клавиша Delete ────────────────────
+    // двойной клик – добавить точку в PathBezier
+    const onDoubleClick = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
+        const canvas = canvasRef.current;
+        if (!canvas || !selectedShapeId) return;
+        const shape = manager.getShapes().find(s => s.id === selectedShapeId);
+        if (!(shape instanceof PathBezier)) return;
+        const point = getDeviceCoordinates(e.clientX, e.clientY, canvas);
+        const localPt = shape.transformPointToLocal(point.x, point.y);
+        if (!localPt) return;
+        shape.insertPointNear(localPt);
+        syncShapes();
+        addToHistory();
+    }, [selectedShapeId, manager, syncShapes, addToHistory]);
+
+    // клавиатура
     useEffect(() => {
         const handler = (e: KeyboardEvent) => {
-            if ((e.key === 'Delete' || e.key === 'Backspace') && selectedId) {
-                manager.remove(selectedId);
-                setSelectedId(null);
-                manager.clearSelection();
+            if (e.key === "Delete" || e.key === "Backspace") {
+                if (selectedShapeId) deleteSelected();
+            } else if (e.ctrlKey && e.key === "z") {
+                e.preventDefault();
+                e.shiftKey ? redo() : undo();
+            } else if (e.key === "Escape") {
+                if (isAddPointMode) setMode("idle");
             }
         };
-        window.addEventListener('keydown', handler);
-        return () => window.removeEventListener('keydown', handler);
-    }, [selectedId, manager]);
+        window.addEventListener("keydown", handler);
+        return () => window.removeEventListener("keydown", handler);
+    }, [selectedShapeId, deleteSelected, undo, redo, isAddPointMode]);
 
-    // ──────────────────── цикл рендеринга ────────────────────
+    // рендеринг
     useLayoutEffect(() => {
         const canvas = canvasRef.current;
         const container = containerRef.current;
@@ -349,11 +599,10 @@ export const CanvasScene = ({ lineAlg }: CanvasSceneProps) => {
         adapterRef.current = adapter;
 
         const resizeNow = (w: number, h: number) => renderer.resizeTo(w, h);
-        const ro = new ResizeObserver((entries) => {
+        const ro = new ResizeObserver(entries => {
             const entry = entries[0];
             if (!entry) return;
-            const { width, height } = entry.contentRect;
-            requestAnimationFrame(() => resizeNow(width, height));
+            requestAnimationFrame(() => resizeNow(entry.contentRect.width, entry.contentRect.height));
         });
         ro.observe(container);
         requestAnimationFrame(() => {
@@ -364,46 +613,62 @@ export const CanvasScene = ({ lineAlg }: CanvasSceneProps) => {
         let raf = 0;
         const frame = () => {
             const r = rendererRef.current;
-            if (r) {
-                r.beginFrame(true);
-                const shapes = manager.getShapes();
-                shapes.forEach(shape => shape.draw(adapter));
+            const a = adapterRef.current;
+            if (!r || !a) return;
+            r.beginFrame(true);
 
-                // Подсветка выбранной фигуры
-                if (selectedId) {
-                    const sel = shapes.find(s => s.id === selectedId);
-                    if (sel) {
-                        const bounds = sel.getBounds();
-                        // Рамка
-                        const rectPts = [
-                            { x: bounds.minX, y: bounds.minY },
-                            { x: bounds.maxX, y: bounds.minY },
-                            { x: bounds.maxX, y: bounds.maxY },
-                            { x: bounds.minX, y: bounds.maxY },
-                        ];
-                        adapter.strokePolygon(rectPts, { r: 0, g: 150, b: 255, a: 200 }, 2, true);
+            // фигуры
+            for (const shape of manager.getShapes()) {
+                shape.draw(a);
+            }
 
-                        // Ручки ресайза
-                        const handles = getHandlePositions(bounds);
-                        handles.forEach(h => adapter.fillCircle(h.x, h.y, HANDLE_RADIUS, { r: 255, g: 255, b: 255, a: 255 }));
+            // выделение и ручки
+            if (selectedShapeId) {
+                const sel = manager.getShapes().find(s => s.id === selectedShapeId);
+                if (sel) {
+                    // рамка (поворачивающийся прямоугольник)
+                    const corners = getShapeBoundsCorners(sel);
+                    a.strokePolygon(corners, { r: 0, g: 120, b: 220, a: 200 }, 2, true);
 
-                        // Ручка поворота
-                        const rotH = getRotateHandle(bounds);
-                        adapter.fillCircle(rotH.x, rotH.y, HANDLE_RADIUS, { r: 100, g: 255, b: 100, a: 255 });
+                    // ручки (8 штук: углы и середины сторон)
+                    const nw = corners[0];
+                    const ne = corners[1];
+                    const se = corners[2];
+                    const sw = corners[3];
+                    const n = { x: (nw.x + ne.x) / 2, y: (nw.y + ne.y) / 2 };
+                    const e = { x: (ne.x + se.x) / 2, y: (ne.y + se.y) / 2 };
+                    const s = { x: (se.x + sw.x) / 2, y: (se.y + sw.y) / 2 };
+                    const w = { x: (sw.x + nw.x) / 2, y: (sw.y + nw.y) / 2 };
+                    const handlePositions = [nw, n, ne, e, se, s, sw, w];
+                    for (const pos of handlePositions) {
+                        a.fillPolygon([
+                            { x: pos.x - HANDLE_SIZE / 2, y: pos.y - HANDLE_SIZE / 2 },
+                            { x: pos.x + HANDLE_SIZE / 2, y: pos.y - HANDLE_SIZE / 2 },
+                            { x: pos.x + HANDLE_SIZE / 2, y: pos.y + HANDLE_SIZE / 2 },
+                            { x: pos.x - HANDLE_SIZE / 2, y: pos.y + HANDLE_SIZE / 2 },
+                        ], { r: 255, g: 255, b: 255, a: 255 });
+                    }
 
-                        // Контрольные точки (жёлтые) для фигур с getControlPoints
-                        if ('getControlPoints' in sel) {
-                            const cpts = (sel as any).getControlPoints() as Point[];
-                            const deviceCpts = cpts.map((p: Point) => sel.transformPointToDevice(p.x, p.y));
-                            deviceCpts.forEach(p => {
-                                adapter.fillCircle(p.x, p.y, HANDLE_RADIUS, { r: 255, g: 255, b: 0, a: 255 });
-                            });
-                        }
+                    // ручка поворота
+                    const topCenter = { x: (nw.x + ne.x) / 2, y: (nw.y + ne.y) / 2 };
+                    const dir = Math.atan2(ne.y - nw.y, ne.x - nw.x);
+                    const normal = { x: -Math.sin(dir), y: Math.cos(dir) };
+                    const rx = topCenter.x + normal.x * ROTATION_HANDLE_DISTANCE;
+                    const ry = topCenter.y + normal.y * ROTATION_HANDLE_DISTANCE;
+                    a.fillCircle(rx, ry, HANDLE_SIZE / 2, { r: 100, g: 255, b: 100, a: 255 });
+
+                    // контрольные точки
+                    if ("getControlPoints" in sel) {
+                        const cpts = (sel as any).getControlPoints() as Point[];
+                        cpts.forEach(p => {
+                            const d = sel.transformPointToDevice(p.x, p.y);
+                            a.fillCircle(d.x, d.y, 5, { r: 255, g: 255, b: 0, a: 255 });
+                        });
                     }
                 }
-
-                r.commit();
             }
+
+            r.commit();
             raf = requestAnimationFrame(frame);
         };
         raf = requestAnimationFrame(frame);
@@ -412,175 +677,69 @@ export const CanvasScene = ({ lineAlg }: CanvasSceneProps) => {
             cancelAnimationFrame(raf);
             ro.disconnect();
             renderer.dispose();
-            rendererRef.current = null;
         };
-    }, [manager, selectedId, lineAlg]);
+    }, [manager, lineAlg, selectedShapeId]);
 
-    // ──────────────────── методы для панели слоёв ────────────────────
-    const handleLayerSelect = (id: string) => {
-        setSelectedId(id);
-        manager.select(id);
-    };
-
-    const handleLayerUp = (id: string) => {
-        manager.moveUp(id);
-        forceUpdate();
-    };
-
-    const handleLayerDown = (id: string) => {
-        manager.moveDown(id);
-        forceUpdate();
-    };
-
-    const handleLayerDelete = (id: string) => {
-        manager.remove(id);
-        if (selectedId === id) setSelectedId(null);
-        manager.clearSelection();
-        forceUpdate();
-    };
-
-    const handleAddShape = (type: string) => {
-        const id = `shape-${Date.now()}`;
-        const defaultTransform = { x: 300, y: 200, rotation: 0, scaleX: 1, scaleY: 1 };
-        let newShape: Shape | null = null;
-
-        switch (type) {
-            case 'rect':
-                newShape = new Rect(id, defaultTransform, 100, 60);
-                newShape.fillColor = { r: 100, g: 150, b: 200, a: 200 };
-                break;
-            case 'line':
-                newShape = new Line(id, defaultTransform, 0, 0, 100, 0);
-                newShape.strokeColor = { r: 200, g: 100, b: 100, a: 255 };
-                newShape.strokeWidth = 4;
-                break;
-            case 'oval':
-                newShape = new Oval(id, defaultTransform, 50, 40);
-                newShape.fillColor = { r: 100, g: 200, b: 100, a: 200 };
-                break;
-            case 'triangle':
-                newShape = new Triangle(id, defaultTransform, 0, -40, 40, 30, -40, 30);
-                newShape.fillColor = { r: 255, g: 180, b: 60, a: 200 };
-                break;
-            case 'quadraticBezier':
-                newShape = new QuadraticBezier(id, defaultTransform,
-                    { x: 0, y: 0 }, { x: 50, y: -80 }, { x: 100, y: 0 }
-                );
-                newShape.strokeColor = { r: 200, g: 100, b: 200, a: 255 };
-                newShape.strokeWidth = 3;
-                break;
-            case 'cubicBezier':
-                newShape = new CubicBezier(id, defaultTransform,
-                    { x: 0, y: 0 }, { x: 30, y: -100 }, { x: 70, y: 100 }, { x: 100, y: 0 }
-                );
-                newShape.strokeColor = { r: 100, g: 200, b: 100, a: 255 };
-                newShape.strokeWidth = 3;
-                break;
-            case 'pathBezier':
-                const pts = [
-                    { x: -50, y: 0 }, { x: 0, y: -50 }, { x: 50, y: 0 },
-                    { x: 30, y: 30 }, { x: -30, y: 30 }
-                ];
-                newShape = new PathBezier(id, defaultTransform, pts, 'catmull', true);
-                newShape.strokeColor = { r: 100, g: 150, b: 255, a: 255 };
-                newShape.strokeWidth = 2.5;
-                break;
-            default:
-                return;
-        }
-        if (newShape) {
-            manager.add(newShape);
-            setSelectedId(id);
-            manager.select(id);
-            forceUpdate(); // чтобы панель слоёв обновилась
-        }
-    };
-
-    const handleCanvasDoubleClick = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
-        if (!selectedId || !selectedShape) return;
-        if (!(selectedShape instanceof PathBezier)) return;
-
+    // обновление курсора
+    useEffect(() => {
         const canvas = canvasRef.current;
-        const renderer = rendererRef.current;
-        if (!canvas || !renderer) return;
+        if (!canvas) return;
+        let cursor = "default";
+        if (isAddPointMode) cursor = "crosshair";
+        else if (hoveredHandle && hoveredHandle !== "rotate") {
+            const map: Record<string, string> = {
+                nw: "nwse-resize",
+                n: "ns-resize",
+                ne: "nesw-resize",
+                e: "ew-resize",
+                se: "nwse-resize",
+                s: "ns-resize",
+                sw: "nesw-resize",
+                w: "ew-resize",
+            };
+            cursor = map[hoveredHandle] || "default";
+        } else if (hoveredHandle === "rotate") cursor = "grab";
+        else if (hoveredPointIndex !== null) cursor = "crosshair";
+        canvas.style.cursor = cursor;
+    }, [hoveredHandle, hoveredPointIndex, isAddPointMode]);
 
-        const point = getCanvasPoint(e, canvas, renderer);
-        const localPt = selectedShape.transformPointToLocal(point.x, point.y);
-        if (!localPt) return;
-
-        const pts = selectedShape.getControlPoints(); // локальные опорные точки
-        const n = pts.length;
-        if (n === 0) {
-            selectedShape.addPoint(localPt);
-            forceUpdate();
-            return;
-        }
-        if (n === 1) {
-            selectedShape.addPoint(localPt);
-            forceUpdate();
-            return;
-        }
-
-        // Ищем ближайший сегмент в локальных координатах
-        let minDist = Infinity;
-        let insertIndex = 0; // после точки с этим индексом вставим новую
-        for (let i = 0; i < n - 1; i++) {
-            const a = pts[i];
-            const b = pts[i + 1];
-            const dist = pointToSegmentDist(localPt.x, localPt.y, a.x, a.y, b.x, b.y);
-            if (dist < minDist) {
-                minDist = dist;
-                insertIndex = i;
-            }
-        }
-        // Если путь замкнут, проверяем последний сегмент (от последней точки к первой)
-        if (selectedShape.closed) {
-            const a = pts[n - 1];
-            const b = pts[0];
-            const dist = pointToSegmentDist(localPt.x, localPt.y, a.x, a.y, b.x, b.y);
-            if (dist < minDist) {
-                minDist = dist;
-                insertIndex = n - 1; // после последней точки, т.е. между последней и первой
-            }
-        }
-
-        // Вставляем новую точку после insertIndex
-        selectedShape.addPoint(localPt, insertIndex + 1);
-        forceUpdate();
-    }, [selectedId, selectedShape, forceUpdate]);
-
-    const handleDeletePoint = () => {
-        if (!selectedId || !selectedShape || !(selectedShape instanceof PathBezier)) return;
-        const pts = selectedShape.getControlPoints();
-        if (pts.length > 0) {
-            selectedShape.removePoint(pts.length - 1); // удаляем последнюю
-            forceUpdate();
-        }
-    };
-
-    // ──────────────────── рендер ────────────────────
     return (
-        <div style={{ display: 'flex', flexDirection: 'column', height: '100vh' }}>
-            <Toolbar onAddShape={handleAddShape} onDeletePoint={handleDeletePoint} />
-            <div style={{ flex: 1, display: 'flex' }}>
-                <div ref={containerRef} style={{ flex: 1, position: 'relative' }}>
+        <div style={{ display: "flex", flexDirection: "column", height: "100vh" }}>
+            <div style={{ flex: 1, display: "flex" }}>
+                <div ref={containerRef} style={{ flex: 1, position: "relative" }}>
                     <canvas
                         ref={canvasRef}
-                        style={{ width: '100%', height: '100%', display: 'block', touchAction: 'none' }}
+                        style={{
+                            width: "100%",
+                            height: "100%",
+                            display: "block",
+                            touchAction: "none",
+                            cursor: activeTool === "select" ? "default" : "crosshair",
+                        }}
                         onPointerDown={onPointerDown}
                         onPointerMove={onPointerMove}
                         onPointerUp={onPointerUp}
-                        onDoubleClick={handleCanvasDoubleClick}
-
+                        onDoubleClick={onDoubleClick}
                     />
+                    <div style={{ position: "absolute", bottom: 5, right: 10, color: "#aaa", fontSize: 12 }}>
+                        X: {cursorPos.x.toFixed(0)}, Y: {cursorPos.y.toFixed(0)}
+                    </div>
                 </div>
                 <LayerPanel
                     shapes={manager.getShapes()}
-                    selectedId={selectedId}
-                    onSelect={handleLayerSelect}
-                    onMoveUp={handleLayerUp}
-                    onMoveDown={handleLayerDown}
-                    onDelete={handleLayerDelete}
+                    selectedId={selectedShapeId}
+                    onSelect={(id) => {
+                        setSelectedShapeId(id);
+                        onSelectionChange?.(manager.getShapes().find(s => s.id === id) ?? null);
+                    }}
+                    onMoveUp={moveUp}
+                    onMoveDown={moveDown}
+                    onDelete={(id) => {
+                        manager.remove(id);
+                        if (selectedShapeId === id) setSelectedShapeId(null);
+                        syncShapes();
+                        addToHistory();
+                    }}
                 />
             </div>
         </div>

@@ -97,6 +97,19 @@ export class Line extends Shape {
         return cloned;
     }
 
+    override setBounds(minX: number, minY: number, maxX: number, maxY: number): void {
+        const cx = (minX + maxX) / 2;
+        const cy = (minY + maxY) / 2;
+
+        this.transform.x = cx;
+        this.transform.y = cy;
+
+        this.x1 = minX - cx;
+        this.y1 = minY - cy;
+        this.x2 = maxX - cx;
+        this.y2 = maxY - cy;
+    }
+
     override toJSON(): any {
         const absX1 = this.x1 + this.transform.x;
         const absY1 = this.y1 + this.transform.y;

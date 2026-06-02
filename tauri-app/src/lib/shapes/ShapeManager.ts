@@ -62,6 +62,10 @@ export class ShapeManager {
         }
     }
 
+    setShapes(shapes: Shape[]) {
+        this.shapes = shapes;
+    }
+
     toJSON(): any[] {
         return this.shapes.map(s => s.toJSON());
     }
