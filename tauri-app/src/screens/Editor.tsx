@@ -12,8 +12,10 @@ import {
     Waypoints,
     VectorSquare
 } from "lucide-react";
-import CanvasScene from "../components/CanvasScene";
+import CanvasScene, { CanvasSceneHandle } from "../components/CanvasScene";
 import type { Shape } from "../lib/shapes/Shape";
+import { useRef } from "react";
+import { useEffect } from "react";
 
 type CanvasTool =
     | "select"
@@ -53,6 +55,8 @@ export default function Editor() {
 
     const [, forcePanelUpdate] = useState(0);
 
+    const canvasRef = useRef<CanvasSceneHandle>(null);
+
     const handleSelectionChange = useCallback((shape: Shape | null) => {
         setSelectedShape(shape);
         forcePanelUpdate(v => v + 1);
@@ -69,6 +73,30 @@ export default function Editor() {
         console.log("Save project:", rawId);
     }, [rawId]);
 
+    useEffect(() => {
+        const handler = (e: KeyboardEvent) => {
+            const isCtrl = e.ctrlKey || e.metaKey;
+
+            if (isCtrl && e.key.toLowerCase() === "z") {
+                e.preventDefault();
+
+                if (e.shiftKey) {
+                    canvasRef.current?.redo(); // Ctrl+Shift+Z = redo
+                } else {
+                    canvasRef.current?.undo(); // Ctrl+Z = undo
+                }
+            }
+
+            if (isCtrl && e.key.toLowerCase() === "y") {
+                e.preventDefault();
+                canvasRef.current?.redo();
+            }
+        };
+
+        window.addEventListener("keydown", handler);
+        return () => window.removeEventListener("keydown", handler);
+    }, []);
+
     return (
         <div className="editor-root">
             <div className="editor-top">
@@ -82,7 +110,7 @@ export default function Editor() {
                     </h2>
                 </div>
 
-                <div>
+                <div style={{ display: "flex", gap: 8 }}>
                     <button className="btn" onClick={handleSave}>
                         <Save size={18} />
                         Сохранить
@@ -202,6 +230,7 @@ export default function Editor() {
 
                         <div className="canvas-stage">
                             <CanvasScene
+                                ref={canvasRef}
                                 lineAlg={lineAlg}
                                 activeTool={activeTool}
                                 onSelectionChange={handleSelectionChange}

@@ -17,7 +17,6 @@ export class QuadraticBezier extends Shape {
         this.p2 = p2;
     }
 
-    /** Точка на кривой в локальных координатах */
     evalLocal(t: number): Point {
         const mt = 1 - t;
         const x = mt * mt * this.p0.x + 2 * mt * t * this.p1.x + t * t * this.p2.x;
@@ -25,16 +24,25 @@ export class QuadraticBezier extends Shape {
         return { x, y };
     }
 
-    /** Аппроксимация кривой ломаной в экранных координатах */
     flattenDevice(segments = 64): Point[] {
         const pts: Point[] = [];
         for (let i = 0; i <= segments; i++) {
             const t = i / segments;
-            const lp = this.evalLocal(t);                  // используем evalLocal
+            const lp = this.evalLocal(t);
             const dp = this.transformPointToDevice(lp.x, lp.y);
             pts.push(dp);
         }
         return pts;
+    }
+
+    // ИСПРАВЛЕНО: центр через bounding box
+    override getCenter(): Point {
+        // центр в локальных координатах фигуры
+            const b = this.getLocalBounds();
+        return {
+            x: (b.minX + b.maxX) / 2,
+            y: (b.minY + b.maxY) / 2
+        };
     }
 
     override draw(r: IRenderer): void {

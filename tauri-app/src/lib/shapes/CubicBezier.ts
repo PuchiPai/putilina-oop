@@ -19,7 +19,6 @@ export class CubicBezier extends Shape {
         this.p3 = p3;
     }
 
-    /** Точка на кривой в локальных координатах */
     evalLocal(t: number): Point {
         const mt = 1 - t;
         const mt2 = mt * mt;
@@ -29,16 +28,24 @@ export class CubicBezier extends Shape {
         return { x, y };
     }
 
-    /** Аппроксимация кривой ломаной в экранных координатах */
     flattenDevice(segments = 64): Point[] {
         const pts: Point[] = [];
         for (let i = 0; i <= segments; i++) {
             const t = i / segments;
-            const lp = this.evalLocal(t);                  // используем evalLocal
+            const lp = this.evalLocal(t);
             const dp = this.transformPointToDevice(lp.x, lp.y);
             pts.push(dp);
         }
         return pts;
+    }
+
+    // ИСПРАВЛЕНО: центр через bounding box
+    override getCenter(): Point {
+        const b = this.getLocalBounds();
+        return {
+            x: (b.minX + b.maxX) / 2,
+            y: (b.minY + b.maxY) / 2
+        };
     }
 
     override draw(r: IRenderer): void {

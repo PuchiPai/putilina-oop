@@ -11,15 +11,18 @@ export class Rect extends Shape {
         this.height = height;
     }
 
+    override getCenter(): Point {
+        const b = this.getLocalBounds();
+        return {
+            x: (b.minX + b.maxX) / 2,
+            y: (b.minY + b.maxY) / 2
+        };
+    }
+
     override getLocalBounds(): Bounds {
         const halfW = this.width / 2;
         const halfH = this.height / 2;
-        return {
-            minX: -halfW,
-            minY: -halfH,
-            maxX: halfW,
-            maxY: halfH,
-        };
+        return { minX: -halfW, minY: -halfH, maxX: halfW, maxY: halfH };
     }
 
     override getBounds(): Bounds {
@@ -29,16 +32,10 @@ export class Rect extends Shape {
             { x:  this.width / 2, y:  this.height / 2 },
             { x: -this.width / 2, y:  this.height / 2 },
         ];
-
-        const deviceCorners = corners.map(p => this.transformPointToDevice(p.x, p.y));
-        const xs = deviceCorners.map(p => p.x);
-        const ys = deviceCorners.map(p => p.y);
-        return {
-            minX: Math.min(...xs),
-            minY: Math.min(...ys),
-            maxX: Math.max(...xs),
-            maxY: Math.max(...ys),
-        };
+        const device = corners.map(p => this.transformPointToDevice(p.x, p.y));
+        const xs = device.map(p => p.x);
+        const ys = device.map(p => p.y);
+        return { minX: Math.min(...xs), minY: Math.min(...ys), maxX: Math.max(...xs), maxY: Math.max(...ys) };
     }
 
     override draw(r: IRenderer): void {
@@ -49,14 +46,10 @@ export class Rect extends Shape {
             { x: -this.width / 2, y:  this.height / 2 },
         ];
         const device = corners.map(p => this.transformPointToDevice(p.x, p.y));
-
         const fill = this.getEffectiveFillColor();
         if (fill) r.fillPolygon(device, fill);
-
         const stroke = this.getEffectiveStrokeColor();
-        if (stroke && this.strokeWidth > 0) {
-            r.strokePolygon(device, stroke, this.strokeWidth);
-        }
+        if (stroke && this.strokeWidth > 0) r.strokePolygon(device, stroke, this.strokeWidth);
     }
 
     override hitTest(px: number, py: number): boolean {
@@ -79,11 +72,8 @@ export class Rect extends Shape {
 
     override toJSON(): any {
         return {
-            id: this.id,
-            type: 'rect',
-            transform: { ...this.transform },
-            width: this.width,
-            height: this.height,
+            id: this.id, type: 'rect', transform: { ...this.transform },
+            width: this.width, height: this.height,
             fillStyle: this.fillColor ? `rgba(${this.fillColor.r},${this.fillColor.g},${this.fillColor.b},${this.fillOpacity})` : null,
             strokeStyle: this.strokeColor ? `rgba(${this.strokeColor.r},${this.strokeColor.g},${this.strokeColor.b},${this.strokeOpacity})` : null,
             strokeWidth: this.strokeWidth,

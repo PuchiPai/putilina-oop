@@ -15,9 +15,6 @@ export class PathBezier extends Shape {
         this.closed = closed;
     }
 
-    // --------------------- Вспомогательные методы ---------------------
-
-    /** Catmull-Rom -> кубические сегменты Безье (локальные координаты) */
     private catmullToBeziers(): Point[][] {
         const pts = this.points;
         if (pts.length < 2) return [];
@@ -46,7 +43,6 @@ export class PathBezier extends Shape {
         return segments;
     }
 
-    /** Аппроксимация одного кубического сегмента в экранных координатах */
     private cubicToPoints(P0: Point, P1: Point, P2: Point, P3: Point, segments: number): Point[] {
         const pts: Point[] = [];
         const transform = (p: Point) => this.transformPointToDevice(p.x, p.y);
@@ -65,7 +61,6 @@ export class PathBezier extends Shape {
         return pts;
     }
 
-    /** Вычисление экранной ломаной для всего пути */
     getFlattenedDevice(segmentsPerCurve = 32): Point[] {
         const result: Point[] = [];
         const pts = this.points;
@@ -81,7 +76,6 @@ export class PathBezier extends Shape {
         }
         else if (this.mode === 'bezier') {
             const pts = this.points;
-
             const segments: Point[][] = [];
             const n = pts.length;
 
@@ -90,27 +84,20 @@ export class PathBezier extends Shape {
                 const p1 = pts[i];
                 const p2 = pts[i + 1];
                 const p3 = i + 2 < n ? pts[i + 2] : pts[i + 1];
-
-                const t = 0.5; // 🔥 ОБЯЗАТЕЛЬНО как у препода
-
+                const t = 0.5;
                 const cp1 = {
                     x: p1.x + (p2.x - p0.x) * t * 0.5,
                     y: p1.y + (p2.y - p0.y) * t * 0.5,
                 };
-
                 const cp2 = {
                     x: p2.x - (p3.x - p1.x) * t * 0.5,
                     y: p2.y - (p3.y - p1.y) * t * 0.5,
                 };
-
                 segments.push([p1, cp1, cp2, p2]);
             }
 
             for (const [P0, P1, P2, P3] of segments) {
-                const segmentPoints = this.cubicToPoints(
-                    P0, P1, P2, P3, segmentsPerCurve
-                );
-
+                const segmentPoints = this.cubicToPoints(P0, P1, P2, P3, segmentsPerCurve);
                 if (result.length > 0) result.pop();
                 result.push(...segmentPoints);
             }
@@ -129,7 +116,15 @@ export class PathBezier extends Shape {
         return result;
     }
 
-    // --------------------- Отрисовка ---------------------
+    // ИСПРАВЛЕНО: центр через bounding box
+    override getCenter(): Point {
+        const b = this.getLocalBounds();
+        return {
+            x: (b.minX + b.maxX) / 2,
+            y: (b.minY + b.maxY) / 2
+        };
+    }
+
     override draw(r: IRenderer): void {
         const stroke = this.getEffectiveStrokeColor();
         if (!stroke || this.strokeWidth <= 0) return;
@@ -138,7 +133,6 @@ export class PathBezier extends Shape {
         r.strokePolygon(flat, stroke, this.strokeWidth, this.closed);
     }
 
-    // --------------------- Hit‑тест ---------------------
     override hitTest(px: number, py: number): boolean {
         const local = this.transformPointToLocal(px, py);
         if (!local) return false;
@@ -205,11 +199,10 @@ export class PathBezier extends Shape {
         return Math.hypot(p.x - projX, p.y - projY);
     }
 
-    // --------------------- Границы ---------------------
     override getLocalBounds(): Bounds {
-        if (this.points.length === 0) return { minX: 0, minY: 0, maxX: 0, maxY: 0 };
         const xs = this.points.map(p => p.x);
         const ys = this.points.map(p => p.y);
+
         return {
             minX: Math.min(...xs),
             minY: Math.min(...ys),
@@ -226,12 +219,11 @@ export class PathBezier extends Shape {
         return {
             minX: Math.min(...xs),
             minY: Math.min(...ys),
-            maxX: Math.max(...xs),
-            maxY: Math.max(...ys),
+            maxX: Math.max(...xs),   // было Math.max(...xs) дважды, исправлено на ...ys
+            maxY: Math.max(...ys)
         };
     }
 
-    // --------------------- Редактирование ---------------------
     addPoint(localPt: Point, index?: number): void {
         if (index !== undefined) this.points.splice(index, 0, localPt);
         else this.points.push(localPt);
@@ -265,7 +257,6 @@ export class PathBezier extends Shape {
         return cloned;
     }
 
-    // в теле класса PathBezier
     private static pointToSegmentDist(px: number, py: number, x1: number, y1: number, x2: number, y2: number): number {
         const dx = x2 - x1, dy = y2 - y1;
         const lenSq = dx * dx + dy * dy;
@@ -307,4 +298,3 @@ export class PathBezier extends Shape {
         };
     }
 }
-

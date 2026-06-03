@@ -11,17 +11,20 @@ export class Oval extends Shape {
         this.radiusY = radiusY;
     }
 
-    override getLocalBounds(): Bounds {
+    override getCenter(): Point {
+        const b = this.getLocalBounds();
         return {
-            minX: -this.radiusX,
-            minY: -this.radiusY,
-            maxX: this.radiusX,
-            maxY: this.radiusY,
+            x: (b.minX + b.maxX) / 2,
+            y: (b.minY + b.maxY) / 2
         };
     }
 
+    override getLocalBounds(): Bounds {
+        return { minX: -this.radiusX, minY: -this.radiusY, maxX: this.radiusX, maxY: this.radiusY };
+    }
+
     override getBounds(): Bounds {
-        const steps = 64; // больше точек -> точнее границы
+        const steps = 64;
         const pts: Point[] = [];
         for (let i = 0; i <= steps; i++) {
             const t = (i / steps) * 2 * Math.PI;
@@ -31,12 +34,7 @@ export class Oval extends Shape {
         }
         const xs = pts.map(p => p.x);
         const ys = pts.map(p => p.y);
-        return {
-            minX: Math.min(...xs),
-            minY: Math.min(...ys),
-            maxX: Math.max(...xs),
-            maxY: Math.max(...ys),
-        };
+        return { minX: Math.min(...xs), minY: Math.min(...ys), maxX: Math.max(...xs), maxY: Math.max(...ys) };
     }
 
     override draw(r: IRenderer): void {
@@ -51,9 +49,7 @@ export class Oval extends Shape {
         const fill = this.getEffectiveFillColor();
         if (fill) r.fillPolygon(points, fill);
         const stroke = this.getEffectiveStrokeColor();
-        if (stroke && this.strokeWidth > 0) {
-            r.strokePolygon(points, stroke, this.strokeWidth);
-        }
+        if (stroke && this.strokeWidth > 0) r.strokePolygon(points, stroke, this.strokeWidth);
     }
 
     override hitTest(px: number, py: number): boolean {
@@ -76,11 +72,8 @@ export class Oval extends Shape {
 
     override toJSON(): any {
         return {
-            id: this.id,
-            type: 'oval',
-            transform: { ...this.transform },
-            radiusX: this.radiusX,
-            radiusY: this.radiusY,
+            id: this.id, type: 'oval', transform: { ...this.transform },
+            radiusX: this.radiusX, radiusY: this.radiusY,
             fillStyle: this.fillColor ? `rgba(${this.fillColor.r},${this.fillColor.g},${this.fillColor.b},${this.fillOpacity})` : null,
             strokeStyle: this.strokeColor ? `rgba(${this.strokeColor.r},${this.strokeColor.g},${this.strokeColor.b},${this.strokeOpacity})` : null,
             strokeWidth: this.strokeWidth,

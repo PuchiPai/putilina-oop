@@ -7,24 +7,19 @@ import type { Point, Bounds } from "../lib/shapes/types";
 import type { Shape } from "../lib/shapes/Shape";
 import { LayerPanel } from "./LayerPanel";
 import { mat3, type Mat3 } from "../lib/math/mat3";
+import { forwardRef, useImperativeHandle } from "react";
 
 type CanvasTool = "select" | "rect" | "oval" | "line" | "triangle" | "quadraticBezier" | "cubicBezier" | "pathBezier";
+
+export interface CanvasSceneHandle {
+    undo: () => void;
+    redo: () => void;
+}
 
 interface CanvasSceneProps {
     lineAlg: LineAlg;
     activeTool: CanvasTool;
     onSelectionChange?: (shape: Shape | null) => void;
-}
-
-// вспомогательные функции
-function pointToSegmentDist(px: number, py: number, x1: number, y1: number, x2: number, y2: number): number {
-    const dx = x2 - x1, dy = y2 - y1;
-    const lenSq = dx * dx + dy * dy;
-    if (lenSq === 0) return Math.hypot(px - x1, py - y1);
-    let t = ((px - x1) * dx + (py - y1) * dy) / lenSq;
-    t = Math.max(0, Math.min(1, t));
-    const projX = x1 + t * dx, projY = y1 + t * dy;
-    return Math.hypot(px - projX, py - projY);
 }
 
 // константы
@@ -46,6 +41,7 @@ interface ShapeStartData {
     height?: number;
     startLocalBounds?: Bounds;
     startInvMatrix?: Mat3;
+    lineEndIndex?: number;
 }
 
 interface HistoryState {
@@ -70,62 +66,45 @@ function createShapeByTool(tool: CanvasTool, id: string, point: Point): Shape | 
         case "rect": {
             const r = new Rect(id, transform, 100, 60);
             r.fillColor = { r: 100, g: 150, b: 200, a: 200 };
-            r.strokeColor = { r: 0, g: 0, b: 0, a: 255 };
-            r.strokeWidth = 2;
+            r.strokeColor = { r: 0, g: 0, b: 0, a: 255 }; r.strokeWidth = 2;
             return r;
         }
         case "oval": {
             const o = new Oval(id, transform, 50, 50);
             o.fillColor = { r: 100, g: 200, b: 100, a: 200 };
-            o.strokeColor = { r: 0, g: 0, b: 0, a: 255 };
-            o.strokeWidth = 2;
+            o.strokeColor = { r: 0, g: 0, b: 0, a: 255 }; o.strokeWidth = 2;
             return o;
         }
         case "line": {
             const l = new Line(id, transform, 0, 0, 150, 0);
-            l.strokeColor = { r: 0, g: 128, b: 0, a: 255 };
-            l.strokeWidth = 4;
+            l.strokeColor = { r: 0, g: 128, b: 0, a: 255 }; l.strokeWidth = 4;
             return l;
         }
         case "triangle": {
             const tri = new Triangle(id, transform, 0, -40, 40, 30, -40, 30);
             tri.fillColor = { r: 255, g: 160, b: 60, a: 200 };
-            tri.strokeColor = { r: 0, g: 0, b: 0, a: 255 };
-            tri.strokeWidth = 2;
+            tri.strokeColor = { r: 0, g: 0, b: 0, a: 255 }; tri.strokeWidth = 2;
             return tri;
         }
         case "quadraticBezier": {
             const q = new QuadraticBezier(id, transform, { x: 0, y: 0 }, { x: 50, y: -80 }, { x: 100, y: 0 });
-            q.strokeColor = { r: 200, g: 100, b: 200, a: 255 };
-            q.strokeWidth = 3;
+            q.strokeColor = { r: 200, g: 100, b: 200, a: 255 }; q.strokeWidth = 3;
             return q;
         }
         case "cubicBezier": {
             const c = new CubicBezier(id, transform, { x: 0, y: 0 }, { x: 30, y: -100 }, { x: 70, y: 100 }, { x: 100, y: 0 });
-            c.strokeColor = { r: 100, g: 200, b: 100, a: 255 };
-            c.strokeWidth = 3;
+            c.strokeColor = { r: 100, g: 200, b: 100, a: 255 }; c.strokeWidth = 3;
             return c;
         }
         case "pathBezier": {
-            const p = new PathBezier(
-                id,
-                transform,
-                [
-                    { x: -50, y: 0 },
-                    { x: 0, y: -50 },
-                    { x: 50, y: 0 },
-                    { x: 30, y: 30 },
-                    { x: -30, y: 30 }
-                ],
-                "catmull",
-                true
-            );
-            p.strokeColor = { r: 100, g: 150, b: 255, a: 255 };
-            p.strokeWidth = 2.5;
+            const p = new PathBezier(id, transform, [
+                { x: -50, y: 0 }, { x: 0, y: -50 }, { x: 50, y: 0 },
+                { x: 30, y: 30 }, { x: -30, y: 30 }
+            ], "catmull", true);
+            p.strokeColor = { r: 100, g: 150, b: 255, a: 255 }; p.strokeWidth = 2.5;
             return p;
         }
-        default:
-            return null;
+        default: return null;
     }
 }
 
@@ -218,7 +197,7 @@ function solveTranslationKeepingAnchor(
 }
 
 // ========== компонент ==========
-export const CanvasScene = ({ lineAlg, activeTool, onSelectionChange }: CanvasSceneProps) => {
+const CanvasScene = forwardRef<CanvasSceneHandle, CanvasSceneProps>(({ lineAlg, activeTool, onSelectionChange }, ref) => {
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const containerRef = useRef<HTMLDivElement>(null);
     const rendererRef = useRef<RasterRenderer | null>(null);
@@ -228,14 +207,14 @@ export const CanvasScene = ({ lineAlg, activeTool, onSelectionChange }: CanvasSc
     const managerRef = useRef<ShapeManager>(new ShapeManager());
     const manager = managerRef.current;
 
-    const [shapes, setShapes] = useState<Shape[]>([]);
+    const [, setShapes] = useState<Shape[]>([]);
     const [selectedShapeId, setSelectedShapeId] = useState<string | null>(null);
     const [mode, setMode] = useState<EditorMode>("idle");
     const [resizeHandle, setResizeHandle] = useState<ResizeHandle>(null);
     const [hoveredHandle, setHoveredHandle] = useState<ResizeHandle | "rotate" | null>(null);
     const [hoveredPointIndex, setHoveredPointIndex] = useState<number | null>(null);
-    const [hoveredShapeId, setHoveredShapeId] = useState<string | null>(null);
-    const [addPointPosition, setAddPointPosition] = useState<Point | null>(null);
+    const [, setHoveredShapeId] = useState<string | null>(null);
+    const [, setAddPointPosition] = useState<Point | null>(null);
     const [cursorPos, setCursorPos] = useState<Point>({ x: 0, y: 0 });
 
     const isAddPointMode = mode === "addPoint";
@@ -255,12 +234,12 @@ export const CanvasScene = ({ lineAlg, activeTool, onSelectionChange }: CanvasSc
 
     // добавить в историю
     const addToHistory = useCallback(() => {
-        const state: HistoryState = {
+        const snapshot: HistoryState = {
             shapes: manager.getShapes().map(s => s.clone()),
-            selectedShapeId: selectedShapeId,
+            selectedShapeId,
         };
         historyRef.current = historyRef.current.slice(0, historyIndexRef.current + 1);
-        historyRef.current.push(state);
+        historyRef.current.push(snapshot);
         historyIndexRef.current++;
     }, [manager, selectedShapeId]);
 
@@ -282,6 +261,8 @@ export const CanvasScene = ({ lineAlg, activeTool, onSelectionChange }: CanvasSc
         setSelectedShapeId(state.selectedShapeId);
         syncShapes();
     }, [manager, syncShapes]);
+
+    useImperativeHandle(ref, () => ({ undo, redo }));
 
     // создание фигуры
     const addShape = useCallback((tool: CanvasTool, point: Point) => {
@@ -305,16 +286,8 @@ export const CanvasScene = ({ lineAlg, activeTool, onSelectionChange }: CanvasSc
     }, [selectedShapeId, manager, syncShapes, addToHistory]);
 
     // слои
-    const moveUp = (id: string) => {
-        manager.moveUp(id);
-        syncShapes();
-        addToHistory();
-    };
-    const moveDown = (id: string) => {
-        manager.moveDown(id);
-        syncShapes();
-        addToHistory();
-    };
+    const moveUp = (id: string) => { manager.moveUp(id); syncShapes(); addToHistory(); };
+    const moveDown = (id: string) => { manager.moveDown(id); syncShapes(); addToHistory(); };
 
     // указатели
     const onPointerDown = useCallback((e: React.PointerEvent<HTMLCanvasElement>) => {
@@ -331,6 +304,41 @@ export const CanvasScene = ({ lineAlg, activeTool, onSelectionChange }: CanvasSc
         const selectedShape = selectedShapeId ? manager.getShapes().find(s => s.id === selectedShapeId) : null;
 
         if (selectedShape) {
+            if (selectedShape instanceof Line) {
+                const p1 = selectedShape.transformPointToDevice(selectedShape.x1, selectedShape.y1);
+                const p2 = selectedShape.transformPointToDevice(selectedShape.x2, selectedShape.y2);
+                const d1 = Math.hypot(point.x - p1.x, point.y - p1.y);
+                const d2 = Math.hypot(point.x - p2.x, point.y - p2.y);
+                if (d1 < HANDLE_SIZE + 2) {
+                    setMode("resize");
+                    setResizeHandle(null);
+                    startPointRef.current = point;
+                    startDataRef.current = {
+                        x: selectedShape.transform.x,
+                        y: selectedShape.transform.y,
+                        scaleX: selectedShape.transform.scaleX,
+                        scaleY: selectedShape.transform.scaleY,
+                        rotation: selectedShape.transform.rotation,
+                        lineEndIndex: 0,
+                    };
+                    canvas.setPointerCapture(e.pointerId);
+                    return;
+                } else if (d2 < HANDLE_SIZE + 2) {
+                    setMode("resize");
+                    setResizeHandle(null);
+                    startPointRef.current = point;
+                    startDataRef.current = {
+                        x: selectedShape.transform.x,
+                        y: selectedShape.transform.y,
+                        scaleX: selectedShape.transform.scaleX,
+                        scaleY: selectedShape.transform.scaleY,
+                        rotation: selectedShape.transform.rotation,
+                        lineEndIndex: 1,
+                    };
+                    canvas.setPointerCapture(e.pointerId);
+                    return;
+                }
+            }
             const handle = getHandleAtPoint(selectedShape, point.x, point.y);
             if (handle === "rotate") {
                 setMode("rotate");
@@ -340,12 +348,10 @@ export const CanvasScene = ({ lineAlg, activeTool, onSelectionChange }: CanvasSc
                     y: selectedShape.transform.y,
                     scaleX: selectedShape.transform.scaleX,
                     scaleY: selectedShape.transform.scaleY,
-                    rotation: selectedShape.transform.rotation,
+                    rotation: selectedShape.transform.rotation
                 };
-                const corners = getShapeBoundsCorners(selectedShape);
-                const cx = (corners[0].x + corners[1].x + corners[2].x + corners[3].x) / 4;
-                const cy = (corners[0].y + corners[1].y + corners[2].y + corners[3].y) / 4;
-                rotateCenterRef.current = { x: cx, y: cy };
+                const localCenter = selectedShape.getCenter();
+                rotateCenterRef.current = selectedShape.transformPointToDevice(localCenter.x, localCenter.y);
                 return;
             } else if (handle) {
                 setMode("resize");
@@ -426,7 +432,6 @@ export const CanvasScene = ({ lineAlg, activeTool, onSelectionChange }: CanvasSc
 
         const selectedShape = selectedShapeId ? manager.getShapes().find(s => s.id === selectedShapeId) : null;
 
-        // режим добавления точки
         if (isAddPointMode && selectedShape instanceof PathBezier) {
             setAddPointPosition(point);
             return;
@@ -447,78 +452,74 @@ export const CanvasScene = ({ lineAlg, activeTool, onSelectionChange }: CanvasSc
             setHoveredPointIndex(getPointIndexAtPosition(selectedShape, point.x, point.y));
         }
 
+        // ===== ПЕРЕМЕЩЕНИЕ =====
         if (mode === "move" && startPointRef.current && startDataRef.current) {
             const dx = point.x - startPointRef.current.x;
             const dy = point.y - startPointRef.current.y;
             selectedShape.transform.x = startDataRef.current.x + dx;
             selectedShape.transform.y = startDataRef.current.y + dy;
             syncShapes();
-        } else if (mode === "resize" && startPointRef.current && startDataRef.current && resizeHandle) {
+        }
+        // ===== ИЗМЕНЕНИЕ РАЗМЕРА =====
+        else if (mode === "resize" && startPointRef.current) {
             const sd = startDataRef.current;
+            if (!sd) return;
+
+            // ----- ЛИНИЯ: перемещаем концы -----
+            if (selectedShape instanceof Line && sd.lineEndIndex !== undefined) {
+                const localPt = selectedShape.transformPointToLocal(point.x, point.y);
+                if (!localPt) return;
+                if (sd.lineEndIndex === 0) {
+                    selectedShape.x1 = localPt.x;
+                    selectedShape.y1 = localPt.y;
+                } else {
+                    selectedShape.x2 = localPt.x;
+                    selectedShape.y2 = localPt.y;
+                }
+                syncShapes();
+                return;
+            }
+
+            // ----- ОСТАЛЬНЫЕ ФИГУРЫ (общий ресайз) -----
             if (sd.width === undefined || sd.height === undefined || !sd.startLocalBounds || !sd.startInvMatrix) return;
 
             const oldW = sd.width;
             const oldH = sd.height;
             if (oldW <= 0 || oldH <= 0) return;
 
-            // движение мыши в локальных координатах фигуры
             const inv = sd.startInvMatrix;
             const localStart = mat3.transformPoint(inv, startPointRef.current.x, startPointRef.current.y);
             const localCurrent = mat3.transformPoint(inv, point.x, point.y);
             const dLocalX = localCurrent.x - localStart.x;
             const dLocalY = localCurrent.y - localStart.y;
 
-            // считаем новую ширину/высоту в локальных координатах
             let newW = oldW;
             let newH = oldH;
 
             switch (resizeHandle) {
-                case "nw":
-                    newW = oldW - dLocalX;
-                    newH = oldH - dLocalY;
-                    break;
-                case "n":
-                    newH = oldH - dLocalY;
-                    break;
-                case "ne":
-                    newW = oldW + dLocalX;
-                    newH = oldH - dLocalY;
-                    break;
-                case "e":
-                    newW = oldW + dLocalX;
-                    break;
-                case "se":
-                    newW = oldW + dLocalX;
-                    newH = oldH + dLocalY;
-                    break;
-                case "s":
-                    newH = oldH + dLocalY;
-                    break;
-                case "sw":
-                    newW = oldW - dLocalX;
-                    newH = oldH + dLocalY;
-                    break;
-                case "w":
-                    newW = oldW - dLocalX;
-                    break;
+                case "nw": newW = oldW - dLocalX; newH = oldH - dLocalY; break;
+                case "n":  newH = oldH - dLocalY; break;
+                case "ne": newW = oldW + dLocalX; newH = oldH - dLocalY; break;
+                case "e":  newW = oldW + dLocalX; break;
+                case "se": newW = oldW + dLocalX; newH = oldH + dLocalY; break;
+                case "s":  newH = oldH + dLocalY; break;
+                case "sw": newW = oldW - dLocalX; newH = oldH + dLocalY; break;
+                case "w":  newW = oldW - dLocalX; break;
             }
 
-            // минимальный размер
-            newW = Math.max(MIN_SIZE, newW);
-            newH = Math.max(MIN_SIZE, newH);
+            if (Math.abs(newW) < MIN_SIZE) newW = Math.sign(newW) * MIN_SIZE;
+            if (Math.abs(newH) < MIN_SIZE) newH = Math.sign(newH) * MIN_SIZE;
 
-            // новые масштабы
             const newScaleX = sd.scaleX * (newW / oldW);
             const newScaleY = sd.scaleY * (newH / oldH);
 
-            // фиксируем опорную точку, чтобы фигура не "прыгала"
             const anchorLocal = getResizeAnchor(sd.startLocalBounds, resizeHandle);
-            const anchorDevice = selectedShape.transformPointToDevice(anchorLocal.x, anchorLocal.y);
+            const anchorWorld = selectedShape.transformPointToDevice(anchorLocal.x, anchorLocal.y);
 
             const newTranslation = solveTranslationKeepingAnchor(
                 selectedShape,
                 anchorLocal,
-                anchorDevice,
+                anchorWorld,
                 newScaleX,
                 newScaleY
             );
@@ -529,14 +530,57 @@ export const CanvasScene = ({ lineAlg, activeTool, onSelectionChange }: CanvasSc
             selectedShape.transform.y = newTranslation.y;
 
             syncShapes();
-        } else if (mode === "rotate" && startPointRef.current && startDataRef.current && rotateCenterRef.current) {
+        }
+        // ===== ПОВОРОТ =====
+        else if (
+            mode === "rotate" &&
+            startPointRef.current &&
+            startDataRef.current &&
+            rotateCenterRef.current
+        ) {
             const cx = rotateCenterRef.current.x;
             const cy = rotateCenterRef.current.y;
-            const startAngle = Math.atan2(startPointRef.current.y - cy, startPointRef.current.x - cx);
-            const currentAngle = Math.atan2(point.y - cy, point.x - cx);
-            selectedShape.transform.rotation = startDataRef.current.rotation + (currentAngle - startAngle);
+
+            const startAngle = Math.atan2(
+                startPointRef.current.y - cy,
+                startPointRef.current.x - cx
+            );
+
+            const currentAngle = Math.atan2(
+                point.y - cy,
+                point.x - cx
+            );
+
+            const delta = currentAngle - startAngle;
+
+            const newRotation = startDataRef.current.rotation + delta;
+
+            const shape = selectedShape;
+            if (!shape) return;
+
+            const localCenter = shape.getCenter();
+
+            const sx = shape.transform.scaleX;
+            const sy = shape.transform.scaleY;
+
+            const cos = Math.cos(newRotation);
+            const sin = Math.sin(newRotation);
+
+            const cxLocal = localCenter.x * sx;
+            const cyLocal = localCenter.y * sy;
+
+            const rotatedX = cos * cxLocal - sin * cyLocal;
+            const rotatedY = sin * cxLocal + cos * cyLocal;
+
+            shape.transform.x = cx - rotatedX;
+            shape.transform.y = cy - rotatedY;
+
+            shape.transform.rotation = newRotation;
+
             syncShapes();
-        } else if (mode === "editPoints" && editPointIndexRef.current !== null && startPointRef.current) {
+        }
+        // ===== РЕДАКТИРОВАНИЕ КОНТРОЛЬНЫХ ТОЧЕК =====
+        else if (mode === "editPoints" && editPointIndexRef.current !== null && startPointRef.current) {
             const localPt = selectedShape.transformPointToLocal(point.x, point.y);
             if (localPt) {
                 (selectedShape as any).setControlPoint(editPointIndexRef.current, localPt);
@@ -744,6 +788,6 @@ export const CanvasScene = ({ lineAlg, activeTool, onSelectionChange }: CanvasSc
             </div>
         </div>
     );
-};
+});
 
 export default CanvasScene;
