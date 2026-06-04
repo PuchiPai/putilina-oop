@@ -91,17 +91,22 @@ export class Line extends Shape {
     }
 
     override toJSON(): any {
-        const absX1 = this.x1 + this.transform.x;
-        const absY1 = this.y1 + this.transform.y;
-        const absX2 = this.x2 + this.transform.x;
-        const absY2 = this.y2 + this.transform.y;
         return {
             id: this.id,
             type: 'line',
             transform: { ...this.transform },
-            x1: absX1, y1: absY1,
-            x2: absX2, y2: absY2,
-            strokeStyle: this.strokeColor ? `rgba(${this.strokeColor.r},${this.strokeColor.g},${this.strokeColor.b},${this.strokeOpacity})` : null,
+
+            // сохраняем локальные координаты
+            x1: this.x1,
+            y1: this.y1,
+            x2: this.x2,
+            y2: this.y2,
+
+            fillColor: this.fillColor ? { ...this.fillColor } : null,
+            fillOpacity: this.fillOpacity,
+
+            strokeColor: this.strokeColor ? { ...this.strokeColor } : null,
+            strokeOpacity: this.strokeOpacity,
             strokeWidth: this.strokeWidth,
         };
     }

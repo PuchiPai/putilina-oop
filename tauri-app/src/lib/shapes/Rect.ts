@@ -72,10 +72,18 @@ export class Rect extends Shape {
 
     override toJSON(): any {
         return {
-            id: this.id, type: 'rect', transform: { ...this.transform },
-            width: this.width, height: this.height,
-            fillStyle: this.fillColor ? `rgba(${this.fillColor.r},${this.fillColor.g},${this.fillColor.b},${this.fillOpacity})` : null,
-            strokeStyle: this.strokeColor ? `rgba(${this.strokeColor.r},${this.strokeColor.g},${this.strokeColor.b},${this.strokeOpacity})` : null,
+            id: this.id,
+            type: 'rect',
+            transform: { ...this.transform },
+
+            width: this.width,
+            height: this.height,
+
+            fillColor: this.fillColor ? { ...this.fillColor } : null,
+            fillOpacity: this.fillOpacity,
+
+            strokeColor: this.strokeColor ? { ...this.strokeColor } : null,
+            strokeOpacity: this.strokeOpacity,
             strokeWidth: this.strokeWidth,
         };
     }

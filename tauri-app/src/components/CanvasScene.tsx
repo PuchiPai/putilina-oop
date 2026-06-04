@@ -19,6 +19,7 @@ export interface CanvasSceneHandle {
 interface CanvasSceneProps {
     lineAlg: LineAlg;
     activeTool: CanvasTool;
+    manager: ShapeManager;               // получаем извне
     onSelectionChange?: (shape: Shape | null) => void;
 }
 
@@ -197,15 +198,11 @@ function solveTranslationKeepingAnchor(
 }
 
 // ========== компонент ==========
-const CanvasScene = forwardRef<CanvasSceneHandle, CanvasSceneProps>(({ lineAlg, activeTool, onSelectionChange }, ref) => {
+const CanvasScene = forwardRef<CanvasSceneHandle, CanvasSceneProps>(({ lineAlg, activeTool, manager, onSelectionChange }, ref) => {
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const containerRef = useRef<HTMLDivElement>(null);
     const rendererRef = useRef<RasterRenderer | null>(null);
     const adapterRef = useRef<RendererAdapter | null>(null);
-
-    // менеджер фигур
-    const managerRef = useRef<ShapeManager>(new ShapeManager());
-    const manager = managerRef.current;
 
     const [, setShapes] = useState<Shape[]>([]);
     const [selectedShapeId, setSelectedShapeId] = useState<string | null>(null);

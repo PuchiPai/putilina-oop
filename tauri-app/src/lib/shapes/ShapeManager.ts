@@ -31,7 +31,6 @@ export class ShapeManager {
         return this.shapes.filter(s => this.selectedIds.has(s.id));
     }
 
-    // --- методы для работы со слоями ---
     moveUp(id: string): void {
         const idx = this.shapes.findIndex(s => s.id === id);
         if (idx >= 0 && idx < this.shapes.length - 1) {
@@ -62,7 +61,7 @@ export class ShapeManager {
         }
     }
 
-    setShapes(shapes: Shape[]) {
+    setShapes(shapes: Shape[]): void {
         this.shapes = shapes;
     }
 
@@ -71,6 +70,14 @@ export class ShapeManager {
     }
 
     loadFromJSON(data: any[]): void {
-        this.shapes = data.map(item => ShapeFactory.fromJSON(item));
+        this.shapes = data
+            .map(item => {
+                try {
+                    return ShapeFactory.fromJSON(item);
+                } catch {
+                    return null;
+                }
+            })
+            .filter(Boolean) as Shape[];
     }
 }

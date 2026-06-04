@@ -290,10 +290,16 @@ export class PathBezier extends Shape {
             id: this.id,
             type: 'path-bezier',
             transform: { ...this.transform },
-            points: this.points,
+
+            points: this.points.map(p => ({ ...p })),
             mode: this.mode,
             closed: this.closed,
-            strokeStyle: this.strokeColor ? `rgba(${this.strokeColor.r},${this.strokeColor.g},${this.strokeColor.b},${this.strokeOpacity})` : null,
+
+            fillColor: this.fillColor ? { ...this.fillColor } : null,
+            fillOpacity: this.fillOpacity,
+
+            strokeColor: this.strokeColor ? { ...this.strokeColor } : null,
+            strokeOpacity: this.strokeOpacity,
             strokeWidth: this.strokeWidth,
         };
     }

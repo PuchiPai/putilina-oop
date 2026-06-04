@@ -72,10 +72,18 @@ export class Oval extends Shape {
 
     override toJSON(): any {
         return {
-            id: this.id, type: 'oval', transform: { ...this.transform },
-            radiusX: this.radiusX, radiusY: this.radiusY,
-            fillStyle: this.fillColor ? `rgba(${this.fillColor.r},${this.fillColor.g},${this.fillColor.b},${this.fillOpacity})` : null,
-            strokeStyle: this.strokeColor ? `rgba(${this.strokeColor.r},${this.strokeColor.g},${this.strokeColor.b},${this.strokeOpacity})` : null,
+            id: this.id,
+            type: 'oval',
+            transform: { ...this.transform },
+
+            radiusX: this.radiusX,
+            radiusY: this.radiusY,
+
+            fillColor: this.fillColor ? { ...this.fillColor } : null,
+            fillOpacity: this.fillOpacity,
+
+            strokeColor: this.strokeColor ? { ...this.strokeColor } : null,
+            strokeOpacity: this.strokeOpacity,
             strokeWidth: this.strokeWidth,
         };
     }

@@ -130,8 +130,17 @@ export class CubicBezier extends Shape {
             id: this.id,
             type: 'cubic-bezier',
             transform: { ...this.transform },
-            p0: this.p0, p1: this.p1, p2: this.p2, p3: this.p3,
-            strokeStyle: this.strokeColor ? `rgba(${this.strokeColor.r},${this.strokeColor.g},${this.strokeColor.b},${this.strokeOpacity})` : null,
+
+            p0: { ...this.p0 },
+            p1: { ...this.p1 },
+            p2: { ...this.p2 },
+            p3: { ...this.p3 },
+
+            fillColor: this.fillColor ? { ...this.fillColor } : null,
+            fillOpacity: this.fillOpacity,
+
+            strokeColor: this.strokeColor ? { ...this.strokeColor } : null,
+            strokeOpacity: this.strokeOpacity,
             strokeWidth: this.strokeWidth,
         };
     }
